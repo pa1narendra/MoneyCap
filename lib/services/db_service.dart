@@ -21,7 +21,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2, // Increment version
+      version: 3, // Increment version for monthly_balances
       onCreate: _createDB,
       onUpgrade: _upgradeDB, // Handle migration
     );
@@ -46,12 +46,43 @@ CREATE TABLE transactions (
 ''');
     // Index for faster sorting and filtering by date
     await db.execute('CREATE INDEX idx_timestamp ON transactions (timestamp)');
+    
+    // Monthly balances table
+    await db.execute('''
+CREATE TABLE monthly_balances (
+  id $idType,
+  month $textType,
+  opening_balance REAL,
+  closing_balance REAL,
+  opening_recorded_at TEXT,
+  closing_recorded_at TEXT,
+  is_reconciled INTEGER DEFAULT 0
+  )
+''');
+    await db.execute('CREATE UNIQUE INDEX idx_month ON monthly_balances (month)');
   }
 
   // Add migration logic
   Future _upgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE transactions ADD COLUMN source TEXT DEFAULT "SMS"');
+    }
+    if (oldVersion < 3) {
+      // Create monthly_balances table
+      const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
+      const textType = 'TEXT NOT NULL';
+      await db.execute('''
+CREATE TABLE monthly_balances (
+  id $idType,
+  month $textType,
+  opening_balance REAL,
+  closing_balance REAL,
+  opening_recorded_at TEXT,
+  closing_recorded_at TEXT,
+  is_reconciled INTEGER DEFAULT 0
+  )
+''');
+      await db.execute('CREATE UNIQUE INDEX idx_month ON monthly_balances (month)');
     }
   }
 
@@ -118,9 +149,81 @@ CREATE TABLE transactions (
     );
   }
 
-  Future<void> deleteAll() async {
-     final db = await instance.database;
-     await db.delete('transactions');
+  Future<int> deleteAll() async {
+    final db = await instance.database;
+    return await db.delete('transactions');
+  }
+
+  // Monthly Balance Methods
+  Future<Map<String, dynamic>?> getMonthlyBalance(String month) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'monthly_balances',
+      where: 'month = ?',
+      whereArgs: [month],
+    );
+    return result.isNotEmpty ? result.first : null;
+  }
+
+  Future<int> saveOpeningBalance(String month, double balance) async {
+    final db = await instance.database;
+    final existing = await getMonthlyBalance(month);
+    
+    if (existing != null) {
+      return await db.update(
+        'monthly_balances',
+        {
+          'opening_balance': balance,
+          'opening_recorded_at': DateTime.now().toIso8601String(),
+        },
+        where: 'month = ?',
+        whereArgs: [month],
+      );
+    } else {
+      return await db.insert('monthly_balances', {
+        'month': month,
+        'opening_balance': balance,
+        'opening_recorded_at': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
+  Future<int> saveClosingBalance(String month, double balance) async {
+    final db = await instance.database;
+    final existing = await getMonthlyBalance(month);
+    
+    if (existing != null) {
+      return await db.update(
+        'monthly_balances',
+        {
+          'closing_balance': balance,
+          'closing_recorded_at': DateTime.now().toIso8601String(),
+        },
+        where: 'month = ?',
+        whereArgs: [month],
+      );
+    } else {
+      return await db.insert('monthly_balances', {
+        'month': month,
+        'closing_balance': balance,
+        'closing_recorded_at': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
+  Future<int> markReconciled(String month) async {
+    final db = await instance.database;
+    return await db.update(
+      'monthly_balances',
+      {'is_reconciled': 1},
+      where: 'month = ?',
+      whereArgs: [month],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getAllMonthlyBalances() async {
+    final db = await instance.database;
+    return await db.query('monthly_balances', orderBy: 'month DESC');
   }
 
   Future close() async {

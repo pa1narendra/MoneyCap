@@ -110,12 +110,12 @@ class TransactionProvider with ChangeNotifier {
   }
 
   // Manual Transaction
-  Future<void> addTransaction(double amount, String type, String merchant) async {
+  Future<void> addTransaction(double amount, String type, String merchant, {DateTime? date}) async {
       final txn = TransactionModel(
           amount: amount,
           type: type,
           merchant: merchant,
-          timestamp: DateTime.now(),
+          timestamp: date ?? DateTime.now(),
           body: 'Manual Entry',
           source: 'MANUAL',
       );
