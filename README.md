@@ -10,6 +10,42 @@ third option.
 
 ---
 
+## 📥 Download & try it
+
+Want to try the app without building it from source? Grab the latest signed
+APK from the **[Releases page](https://github.com/pa1narendra/MoneyCap/releases/latest)**.
+It's a normal Android app — it's just distributed here directly instead of
+through the Play Store.
+
+### Install steps (Android)
+
+1. On your phone, open the **[latest release](https://github.com/pa1narendra/MoneyCap/releases/latest)** and download the `.apk` file (e.g. `moneycap-v1.0.0.apk`).
+2. Tap the downloaded file (from the download notification or your **Files** app).
+3. If your phone asks, allow installs from this source (see fixes below), then tap **Install**.
+4. Open the app and grant **SMS** and **Notification** permissions when prompted — SMS access is what lets it auto-detect your transactions. Everything stays on your device; nothing is uploaded.
+
+### Common install issues & fixes
+
+Because this isn't a Play Store app, Android may warn you the first time. These are all normal and safe to allow for an app you trust:
+
+- **"For your security, your phone is not allowed to install unknown apps from this source."**
+  Tap **Settings** in that prompt and enable **Allow from this source** for the app you're installing from (e.g. Chrome or Files). You can turn it back off afterward.
+  *Manual path:* Settings → Apps → Special app access → **Install unknown apps**.
+- **"App not installed" / blocked by Play Protect.**
+  Tap **More details → Install anyway**. If it still blocks, open Play Store → tap your profile → **Play Protect → Settings** → temporarily turn off *Scan apps with Play Protect*, install, then turn it back on. (It's flagged only because it's not from the Play Store, not because anything is wrong.)
+- **"App not installed" because a different version already exists.**
+  Uninstall any previous copy first, then install again.
+- **Can't find the downloaded file?** Open the **Downloads** notification, or use **Files by Google → Downloads**.
+
+> ⚠️ Only ever install APKs from sources you trust. Every release here is built
+> automatically by GitHub Actions straight from the source in this repo — see
+> [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+> ℹ️ **iOS:** not distributed as a download — Apple doesn't allow third-party
+> apps to read SMS, so iOS is manual-entry only.
+
+---
+
 ## The problem
 
 Every expense tracker I tried put me in the same bind:
@@ -193,7 +229,7 @@ lib/
 Requires Flutter 3.x and Android Studio (or a connected Android device).
 
 ```bash
-git clone https://github.com/pa1narendra/finance-manager.git
+git clone https://github.com/pa1narendra/MoneyCap.git
 cd finance-manager
 
 flutter pub get
