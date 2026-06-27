@@ -22,6 +22,9 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final base = cs.surfaceContainerHighest;
+    final highlight = Color.lerp(base, cs.onSurface, 0.08)!;
     return AnimatedBuilder(
       animation: _ctrl,
       child: widget.child,
@@ -33,11 +36,7 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
             return LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
-              colors: const [
-                Color(0xFF2A2A2D),
-                Color(0xFF3C3C42),
-                Color(0xFF2A2A2D),
-              ],
+              colors: [base, highlight, base],
               stops: [
                 (t - 0.3).clamp(0.0, 1.0),
                 t.clamp(0.0, 1.0),
@@ -65,7 +64,7 @@ class SkeletonBox extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2D),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(radius),
       ),
     );

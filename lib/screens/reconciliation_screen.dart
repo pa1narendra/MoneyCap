@@ -5,6 +5,7 @@ import '../services/db_service.dart';
 import '../providers/transaction_provider.dart';
 import 'package:provider/provider.dart';
 import '../widgets/app_toast.dart';
+import '../theme/app_theme.dart';
 
 class ReconciliationScreen extends StatefulWidget {
   final String? initialMonth;
@@ -72,6 +73,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   }
 
   void _showBalanceEntryDialog({required bool isOpening}) {
+    final cs = Theme.of(context).colorScheme;
     final controller = TextEditingController();
     final currentValue = isOpening
         ? (_monthlyBalance != null ? _monthlyBalance!['opening_balance'] : null)
@@ -95,9 +97,9 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
               isOpening
                   ? 'Enter your account balance at the start of $monthName'
                   : 'Enter your account balance at the end of $monthName',
-              style: TextStyle(color: Colors.grey[400], fontSize: 14),
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
             TextField(
               controller: controller,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -116,7 +118,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
-          ElevatedButton(
+          FilledButton(
             onPressed: () async {
               final amount = double.tryParse(controller.text);
               if (amount == null || amount < 0) {
@@ -193,7 +195,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
                   controller: merchantController,
                   decoration: const InputDecoration(labelText: 'Merchant / Description'),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: AppSpacing.sm),
                 Row(
                   children: [
                     const Text('Type: '),
@@ -214,7 +216,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(
+            FilledButton(
               onPressed: () async {
                 final amount = double.tryParse(amountController.text) ?? 0.0;
                 if (amount > 0 && merchantController.text.isNotEmpty) {
@@ -238,6 +240,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final hasOpening = _monthlyBalance?['opening_balance'] != null;
     final hasClosing = _monthlyBalance?['closing_balance'] != null;
     final hasBothBalances = hasOpening && hasClosing;
@@ -257,25 +260,25 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.md),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Month selector - always visible
-                  Card(
+                  _card(
                     child: ListTile(
-                      leading: const Icon(Icons.calendar_month),
+                      leading: Icon(Icons.calendar_month, color: cs.primary),
                       title: Text(
                         DateFormat('MMMM yyyy').format(
                           DateTime.parse('${_selectedMonth!}-01'),
                         ),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       trailing: const Icon(Icons.arrow_drop_down),
                       onTap: _pickMonth,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.md),
 
                   // Balance entry cards
                   _buildBalanceEntryCard(
@@ -283,71 +286,63 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
                     subtitle: 'Balance at the start of the month',
                     value: _monthlyBalance?['opening_balance'] as double?,
                     icon: Icons.login,
-                    color: Colors.blue,
+                    color: cs.primary,
                     onTap: () => _showBalanceEntryDialog(isOpening: true),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.sm),
                   _buildBalanceEntryCard(
                     title: 'Closing Balance',
                     subtitle: 'Balance at the end of the month',
                     value: _monthlyBalance?['closing_balance'] as double?,
                     icon: Icons.logout,
-                    color: Colors.orange,
+                    color: cs.tertiary,
                     onTap: () => _showBalanceEntryDialog(isOpening: false),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.md),
 
                   // Transaction Summary - always show
                   if (_summary != null) _buildTransactionSummary(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.md),
 
                   // Full reconciliation - only when both balances exist
                   if (hasBothBalances && _discrepancy != null) ...[
                     _buildReconciliationCard(),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.md),
 
-                    if (_discrepancy!.discrepancy.abs() > 0.01)
-                      _buildDiscrepancyAlert(),
-                    const SizedBox(height: 16),
+                    if (_discrepancy!.discrepancy.abs() > 0.01) _buildDiscrepancyAlert(),
+                    const SizedBox(height: AppSpacing.md),
 
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _showAddTransactionDialog,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Add Missing Transaction'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ] else if (!hasBothBalances) ...[
-                    Card(
-                      color: Colors.amber.withOpacity(0.1),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.info_outline, color: Colors.amber),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                !hasOpening && !hasClosing
-                                    ? 'Enter both opening and closing balances to see reconciliation.'
-                                    : !hasOpening
-                                        ? 'Enter the opening balance to see reconciliation.'
-                                        : 'Enter the closing balance to see reconciliation.',
-                                style: const TextStyle(color: Colors.amber),
-                              ),
-                            ),
-                          ],
-                        ),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _showAddTransactionDialog,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Missing Transaction'),
                       ),
                     ),
-                  ],
+                  ] else if (!hasBothBalances)
+                    _buildInfoCard(
+                      !hasOpening && !hasClosing
+                          ? 'Enter both opening and closing balances to see reconciliation.'
+                          : !hasOpening
+                              ? 'Enter the opening balance to see reconciliation.'
+                              : 'Enter the closing balance to see reconciliation.',
+                    ),
                 ],
               ),
             ),
+    );
+  }
+
+  /// Flat, rounded card consistent with the rest of the app.
+  Widget _card({required Widget child}) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: child,
     );
   }
 
@@ -359,59 +354,52 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return Card(
+    final cs = Theme.of(context).colorScheme;
+    return _card(
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: color.withOpacity(0.2),
+          backgroundColor: color.withOpacity(0.15),
           child: Icon(icon, color: color),
         ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: value != null
             ? Text(
                 '₹${value.toStringAsFixed(2)}',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color),
               )
-            : Text(subtitle, style: TextStyle(color: Colors.grey.shade500)),
-        trailing: Icon(
-          value != null ? Icons.edit : Icons.add_circle_outline,
-          color: color,
-        ),
+            : Text(subtitle, style: TextStyle(color: cs.onSurfaceVariant)),
+        trailing: Icon(value != null ? Icons.edit : Icons.add_circle_outline, color: color),
         onTap: onTap,
       ),
     );
   }
 
   Widget _buildReconciliationCard() {
-    return Card(
-      elevation: 4,
+    final cs = Theme.of(context).colorScheme;
+    final income = AppColors.income(cs.brightness);
+    final expense = AppColors.expense(cs.brightness);
+    return _card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Reconciliation',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
+            const Text('Reconciliation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const Divider(),
-            _buildBalanceRow('Opening Balance', _discrepancy!.openingBalance, Colors.blue),
-            const SizedBox(height: 8),
-            _buildBalanceRow('+ Credits', _summary?.totalCredits ?? 0, Colors.green),
-            const SizedBox(height: 8),
-            _buildBalanceRow('- Debits', _summary?.totalDebits ?? 0, Colors.red),
+            _buildBalanceRow('Opening Balance', _discrepancy!.openingBalance, cs.primary),
+            const SizedBox(height: AppSpacing.sm),
+            _buildBalanceRow('+ Credits', _summary?.totalCredits ?? 0, income),
+            const SizedBox(height: AppSpacing.sm),
+            _buildBalanceRow('- Debits', _summary?.totalDebits ?? 0, expense),
             const Divider(),
-            _buildBalanceRow('Expected Closing', _discrepancy!.expectedClosing, Colors.grey, isBold: true),
-            const SizedBox(height: 8),
-            _buildBalanceRow('Actual Closing', _discrepancy!.closingBalance, Colors.orange, isBold: true),
+            _buildBalanceRow('Expected Closing', _discrepancy!.expectedClosing, cs.onSurfaceVariant, isBold: true),
+            const SizedBox(height: AppSpacing.sm),
+            _buildBalanceRow('Actual Closing', _discrepancy!.closingBalance, cs.tertiary, isBold: true),
             const Divider(),
             _buildBalanceRow(
               'Discrepancy',
               _discrepancy!.discrepancy,
-              _discrepancy!.discrepancy.abs() < 0.01 ? Colors.green : Colors.red,
+              _discrepancy!.discrepancy.abs() < 0.01 ? income : expense,
               isBold: true,
             ),
           ],
@@ -426,15 +414,13 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
       children: [
         Text(
           label,
-          style: TextStyle(
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-          ),
+          style: TextStyle(fontWeight: isBold ? FontWeight.w700 : FontWeight.normal),
         ),
         Text(
           '₹${amount.toStringAsFixed(2)}',
           style: TextStyle(
             color: color,
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            fontWeight: isBold ? FontWeight.w700 : FontWeight.normal,
             fontSize: isBold ? 18 : 16,
           ),
         ),
@@ -443,48 +429,25 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   }
 
   Widget _buildTransactionSummary() {
-    return Card(
+    final cs = Theme.of(context).colorScheme;
+    final income = AppColors.income(cs.brightness);
+    final expense = AppColors.expense(cs.brightness);
+    return _card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Transaction Summary',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
+            const Text('Transaction Summary', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const Divider(),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                Column(
-                  children: [
-                    const Text('Credits', style: TextStyle(color: Colors.green)),
-                    Text(
-                      '₹${_summary!.totalCredits.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green,
-                      ),
-                    ),
-                    Text('${_summary!.creditCount} transactions'),
-                  ],
+                Expanded(
+                  child: _summaryColumn('Credits', _summary!.totalCredits, _summary!.creditCount, income),
                 ),
-                Container(height: 60, width: 1, color: Colors.grey),
-                Column(
-                  children: [
-                    const Text('Debits', style: TextStyle(color: Colors.red)),
-                    Text(
-                      '₹${_summary!.totalDebits.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.red,
-                      ),
-                    ),
-                    Text('${_summary!.debitCount} transactions'),
-                  ],
+                Container(height: 60, width: 1, color: cs.outlineVariant),
+                Expanded(
+                  child: _summaryColumn('Debits', _summary!.totalDebits, _summary!.debitCount, expense),
                 ),
               ],
             ),
@@ -494,32 +457,73 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     );
   }
 
-  Widget _buildDiscrepancyAlert() {
-    final isPositive = _discrepancy!.discrepancy > 0;
-    return Card(
-      color: Colors.red.shade50,
+  Widget _summaryColumn(String label, double amount, int count, Color color) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Text(label, style: TextStyle(color: color)),
+        const SizedBox(height: AppSpacing.xs),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            '₹${amount.toStringAsFixed(2)}',
+            maxLines: 1,
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: color),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text('$count transactions', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+      ],
+    );
+  }
+
+  /// Neutral info card shown when balances are missing.
+  Widget _buildInfoCard(String message) {
+    final cs = Theme.of(context).colorScheme;
+    return _card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Row(
           children: [
-            Icon(Icons.warning_amber, color: Colors.red.shade700, size: 32),
-            const SizedBox(width: 12),
+            Icon(Icons.info_outline, color: cs.primary),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Text(message, style: TextStyle(color: cs.onSurfaceVariant)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDiscrepancyAlert() {
+    final cs = Theme.of(context).colorScheme;
+    final isPositive = _discrepancy!.discrepancy > 0;
+    return Card(
+      elevation: 0,
+      color: cs.errorContainer,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber, color: cs.onErrorContainer, size: 32),
+            const SizedBox(width: AppSpacing.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     'Discrepancy Detected',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.red.shade700,
-                    ),
+                    style: TextStyle(fontWeight: FontWeight.w700, color: cs.onErrorContainer),
                   ),
+                  const SizedBox(height: AppSpacing.xs),
                   Text(
                     isPositive
                         ? 'Your actual balance is ₹${_discrepancy!.discrepancy.toStringAsFixed(2)} higher than expected. You may have missing credit transactions.'
                         : 'Your actual balance is ₹${_discrepancy!.discrepancy.abs().toStringAsFixed(2)} lower than expected. You may have missing debit transactions.',
-                    style: TextStyle(color: Colors.red.shade900),
+                    style: TextStyle(color: cs.onErrorContainer),
                   ),
                 ],
               ),

@@ -35,7 +35,7 @@ class FilterDialog extends StatelessWidget {
               height: 4,
               margin: const EdgeInsets.only(bottom: 12),
               decoration: BoxDecoration(
-                color: Colors.grey.shade600,
+                color: theme.colorScheme.outlineVariant,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -53,7 +53,11 @@ class FilterDialog extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            ...TimeFilter.values.map((filter) {
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: TimeFilter.values.map((filter) {
               final isSelected = initialFilter == filter;
               final range = _getPresetRange(filter);
               String? subtitle;
@@ -69,7 +73,7 @@ class FilterDialog extends StatelessWidget {
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20),
                 leading: Icon(
                   _getFilterIcon(filter),
-                  color: isSelected ? theme.colorScheme.primary : Colors.grey,
+                  color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
                   size: 22,
                 ),
                 title: Text(
@@ -80,7 +84,7 @@ class FilterDialog extends StatelessWidget {
                   ),
                 ),
                 subtitle: subtitle != null
-                    ? Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey.shade500))
+                    ? Text(subtitle, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant))
                     : null,
                 trailing: isSelected
                     ? Icon(Icons.check_circle, color: theme.colorScheme.primary, size: 20)
@@ -107,7 +111,10 @@ class FilterDialog extends StatelessWidget {
                   }
                 },
               );
-            }),
+                  }).toList(),
+                ),
+              ),
+            ),
           ],
         ),
       ),

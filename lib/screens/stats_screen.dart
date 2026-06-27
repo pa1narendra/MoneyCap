@@ -1,133 +1,164 @@
-
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import '../providers/transaction_provider.dart';
+import '../theme/app_theme.dart';
 
 class StatsScreen extends StatelessWidget {
   const StatsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final provider = context.watch<TransactionProvider>();
-    // Use filtered transactions or all? Usually analytics is on all or filtered. Let's use filtered.
     final txns = provider.filteredTransactions.where((t) => t.type == 'DEBIT').toList();
-    
-    // 1. Group by merchant for Pie Chart (Total Cost)
-    final Map<String, double> merchantExpenses = {};
-    // 2. Group by merchant for Repeated Payments (Count + Total)
-    final Map<String, int> merchantCounts = {};
 
+    // Group expenses by merchant.
+    final Map<String, double> merchantExpenses = {};
+    final Map<String, int> merchantCounts = {};
     for (var txn in txns) {
-        merchantExpenses[txn.merchant] = (merchantExpenses[txn.merchant] ?? 0) + txn.amount;
-        merchantCounts[txn.merchant] = (merchantCounts[txn.merchant] ?? 0) + 1;
+      merchantExpenses[txn.merchant] = (merchantExpenses[txn.merchant] ?? 0) + txn.amount;
+      merchantCounts[txn.merchant] = (merchantCounts[txn.merchant] ?? 0) + 1;
     }
 
-    // Sort for Pie Chart
     final sortedExpenses = merchantExpenses.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    
-    // Sort for Repeated Payments (Frequency > 1, sort by frequency desc)
     final repeatedPayments = merchantCounts.entries
         .where((e) => e.value > 1)
-        .map((e) {
-            return _RepeatedPayment(
-                merchant: e.key,
-                count: e.value,
-                totalAmount: merchantExpenses[e.key] ?? 0.0,
-            );
-        })
+        .map((e) => _RepeatedPayment(
+              merchant: e.key,
+              count: e.value,
+              totalAmount: merchantExpenses[e.key] ?? 0.0,
+            ))
         .toList()
       ..sort((a, b) => b.count.compareTo(a.count));
 
     final topExpenses = sortedExpenses.take(5).toList();
     final totalExpense = provider.totalExpense;
 
+    Color colorFor(int i) => AppColors.chartPalette[i % AppColors.chartPalette.length];
+
     return Scaffold(
       appBar: AppBar(title: const Text('Statistics')),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             _buildSectionTitle('Top Spending Categories'),
-             const SizedBox(height: 20),
+            const _SectionTitle('Top Spending'),
+            const SizedBox(height: AppSpacing.lg),
             if (totalExpense > 0)
-            SizedBox(
-              height: 250,
-              child: PieChart(
-                PieChartData(
-                  sections: topExpenses.map((e) {
-                    final color = Colors.primaries[topExpenses.indexOf(e) % Colors.primaries.length];
-                    
-                    return PieChartSectionData(
-                      color: color,
-                      value: e.value,
-                      title: '${(e.value / totalExpense * 100).toStringAsFixed(0)}%',
-                      radius: 60,
-                      titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
-                    );
-                  }).toList(),
-                  sectionsSpace: 2,
-                  centerSpaceRadius: 40,
+              SizedBox(
+                height: 240,
+                child: PieChart(
+                  PieChartData(
+                    sections: topExpenses.asMap().entries.map((entry) {
+                      final color = colorFor(entry.key);
+                      final pct = entry.value.value / totalExpense * 100;
+                      // Pick readable label color for this slice.
+                      final onColor =
+                          ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+                              ? Colors.white
+                              : Colors.black87;
+                      return PieChartSectionData(
+                        color: color,
+                        value: entry.value.value,
+                        title: '${pct.toStringAsFixed(0)}%',
+                        radius: 58,
+                        titleStyle: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: onColor,
+                        ),
+                      );
+                    }).toList(),
+                    sectionsSpace: 3,
+                    centerSpaceRadius: 48,
+                  ),
                 ),
               ),
-            ),
-             const SizedBox(height: 20),
+            if (topExpenses.isEmpty) _emptyState(context, 'No expenses to chart yet'),
+            const SizedBox(height: AppSpacing.md),
             // Legend
-            ...topExpenses.map((e) {
-                 final color = Colors.primaries[topExpenses.indexOf(e) % Colors.primaries.length];
-                 return ListTile(
-                     leading: CircleAvatar(backgroundColor: color, radius: 10),
-                     title: Text(e.key),
-                     trailing: Text('₹${e.value.toStringAsFixed(2)}'),
-                 );
-            }),
-            if (topExpenses.isEmpty) const Center(child: Text("No expenses to chart")),
-            
-            const Divider(height: 40),
-            
-            _buildSectionTitle('Repeated Payments'),
-            const Text('Merchants you have paid multiple times.'),
-            const SizedBox(height: 10),
-            if (repeatedPayments.isEmpty) 
-                const Padding(
-                  padding: EdgeInsets.all(20.0),
-                  child: Center(child: Text('No repeated payments found.')),
-                ),
-            
-            ...repeatedPayments.map((rp) {
-                return Card(
-                    child: ListTile(
-                        leading: CircleAvatar(
-                            backgroundColor: Colors.blue.withOpacity(0.2),
-                            foregroundColor: Colors.blue,
-                            child: Text(rp.count.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                        title: Text(rp.merchant, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text('${rp.count} transactions'),
-                        trailing: Text(
-                            '₹${rp.totalAmount.toStringAsFixed(2)}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                        ),
+            ...topExpenses.asMap().entries.map((entry) {
+              final e = entry.value;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(color: colorFor(entry.key), shape: BoxShape.circle),
                     ),
-                );
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(child: Text(e.key, overflow: TextOverflow.ellipsis)),
+                    Text('₹${e.value.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              );
             }),
+
+            const SizedBox(height: AppSpacing.lg),
+            const Divider(),
+            const SizedBox(height: AppSpacing.md),
+
+            const _SectionTitle('Repeated Payments'),
+            const SizedBox(height: AppSpacing.xs),
+            Text('Merchants you have paid multiple times.',
+                style: TextStyle(color: cs.onSurfaceVariant)),
+            const SizedBox(height: AppSpacing.md),
+            if (repeatedPayments.isEmpty) _emptyState(context, 'No repeated payments found'),
+            ...repeatedPayments.map((rp) {
+              return Card(
+                elevation: 0,
+                color: cs.surfaceContainerHighest,
+                margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: cs.primary.withOpacity(0.15),
+                    foregroundColor: cs.primary,
+                    child: Text('${rp.count}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  title: Text(rp.merchant, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text('${rp.count} transactions'),
+                  trailing: Text(
+                    '₹${rp.totalAmount.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: AppSpacing.md),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-      return Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold));
+  Widget _emptyState(BuildContext context, String message) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Center(child: Text(message, style: TextStyle(color: cs.onSurfaceVariant))),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+  const _SectionTitle(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700));
   }
 }
 
 class _RepeatedPayment {
-    final String merchant;
-    final int count;
-    final double totalAmount;
-
-    _RepeatedPayment({required this.merchant, required this.count, required this.totalAmount});
+  final String merchant;
+  final int count;
+  final double totalAmount;
+  _RepeatedPayment({required this.merchant, required this.count, required this.totalAmount});
 }

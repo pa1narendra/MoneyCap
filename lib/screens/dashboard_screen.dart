@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/transaction_provider.dart';
+import '../providers/settings_provider.dart';
 import '../widgets/filter_dialog.dart';
 import '../widgets/balance_prompt_dialog.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/app_toast.dart';
+import '../theme/app_theme.dart';
 import '../services/balance_service.dart';
 import '../services/notification_service.dart';
 import '../services/push_service.dart';
@@ -23,6 +25,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<String>? _notificationSub;
   bool _isBalanceDialogShown = false;
+  bool _namePromptShown = false;
 
   @override
   void initState() {
@@ -116,9 +119,107 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _showThemePicker(BuildContext context) {
+    final settings = context.read<SettingsProvider>();
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(AppSpacing.md),
+              child: Row(
+                children: [
+                  Icon(Icons.brightness_6),
+                  SizedBox(width: AppSpacing.sm),
+                  Text('Theme', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+            for (final entry in const {
+              ThemeMode.system: ('System default', Icons.brightness_auto),
+              ThemeMode.light: ('Light', Icons.light_mode),
+              ThemeMode.dark: ('Dark', Icons.dark_mode),
+            }.entries)
+              RadioListTile<ThemeMode>(
+                value: entry.key,
+                groupValue: settings.themeMode,
+                onChanged: (m) {
+                  settings.setThemeMode(m!);
+                  Navigator.pop(ctx);
+                },
+                title: Text(entry.value.$1),
+                secondary: Icon(entry.value.$2),
+              ),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showNameDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Welcome to MoneyCap 👋'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("What should we call you?"),
+            const SizedBox(height: AppSpacing.md),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _saveName(ctx, controller.text),
+              decoration: const InputDecoration(
+                labelText: 'Your name',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              context.read<SettingsProvider>().setUserName('');
+              Navigator.pop(ctx);
+            },
+            child: const Text('Skip'),
+          ),
+          FilledButton(
+            onPressed: () => _saveName(ctx, controller.text),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _saveName(BuildContext ctx, String name) {
+    if (name.trim().isEmpty) return;
+    context.read<SettingsProvider>().setUserName(name);
+    Navigator.pop(ctx);
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<TransactionProvider>();
+    final settings = context.watch<SettingsProvider>();
+    final cs = Theme.of(context).colorScheme;
+
+    // First-launch: ask the user's name once (after the frame is built).
+    if (settings.needsName && !_namePromptShown) {
+      _namePromptShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showNameDialog());
+    }
+
     final currentRange = provider.currentDateRange;
     String rangeLabel = provider.activeFilter.label;
 
@@ -143,6 +244,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const StatsScreen()));
               } else if (value == 'reconciliation') {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const ReconciliationScreen()));
+              } else if (value == 'theme') {
+                _showThemePicker(context);
               } else if (value == 'reset') {
                 showDialog(
                   context: context,
@@ -157,7 +260,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           Navigator.pop(ctx);
                           showToast(context, 'Data Reset Complete');
                         },
-                        child: const Text('Reset', style: TextStyle(color: Colors.red)),
+                        child: Text('Reset', style: TextStyle(color: cs.error)),
                       ),
                     ],
                   ),
@@ -174,6 +277,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Row(children: [Icon(Icons.account_balance), SizedBox(width: 8), Text('Reconciliation')]),
               ),
               const PopupMenuItem(
+                value: 'theme',
+                child: Row(children: [Icon(Icons.brightness_6), SizedBox(width: 8), Text('Theme')]),
+              ),
+              const PopupMenuItem(
                 value: 'reset',
                 child: Row(children: [Icon(Icons.delete_forever, color: Colors.red), SizedBox(width: 8), Text('Reset Data')]),
               ),
@@ -187,39 +294,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onRefresh: provider.syncSms,
               child: Column(
                 children: [
+                  // Personalized greeting — full width so long names aren't clipped.
                   Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        settings.greeting(),
+                        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: () => _showFilterDialog(context, provider),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(8),
-                              color: Colors.white,
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.calendar_today, size: 16),
-                                const SizedBox(width: 8),
-                                Text(rangeLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                const Icon(Icons.arrow_drop_down),
-                              ],
+                        Flexible(
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => _showFilterDialog(context, provider),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: cs.outlineVariant),
+                                borderRadius: BorderRadius.circular(12),
+                                color: cs.surfaceContainerHighest,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.calendar_today, size: 16, color: cs.onSurfaceVariant),
+                                  const SizedBox(width: AppSpacing.sm),
+                                  Flexible(
+                                    child: Text(
+                                      rangeLabel,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                  ),
+                                  Icon(Icons.arrow_drop_down, color: cs.onSurfaceVariant),
+                                ],
+                              ),
                             ),
                           ),
                         ),
+                        const SizedBox(width: AppSpacing.sm),
                         Text(
                           '${provider.filteredTransactions.length} items',
-                          style: TextStyle(color: Colors.grey[600]),
+                          style: TextStyle(color: cs.onSurfaceVariant),
                         ),
                       ],
                     ),
                   ),
-                  _buildSummaryCard(provider),
+                  _buildSummaryCard(context, provider),
                   Expanded(
                     child: provider.filteredTransactions.isEmpty
                         ? const Center(child: Text('No transactions in this period'))
@@ -227,27 +355,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             itemCount: provider.filteredTransactions.length,
                             itemBuilder: (context, index) {
                               final txn = provider.filteredTransactions[index];
+                              final isDebit = txn.type == 'DEBIT';
+                              final txnColor = isDebit
+                                  ? AppColors.expense(cs.brightness)
+                                  : AppColors.income(cs.brightness);
                               return ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: txn.type == 'DEBIT' ? Colors.red.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                                  backgroundColor: txnColor.withOpacity(0.15),
                                   child: Icon(
-                                    txn.type == 'DEBIT' ? Icons.arrow_upward : Icons.arrow_downward,
-                                    color: txn.type == 'DEBIT' ? Colors.red : Colors.green,
+                                    isDebit ? Icons.arrow_upward : Icons.arrow_downward,
+                                    color: txnColor,
                                   ),
                                 ),
-                                title: Text(txn.merchant, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                title: Text(txn.merchant, style: const TextStyle(fontWeight: FontWeight.w600)),
                                 subtitle: Row(
                                   children: [
-                                    Icon(txn.source == 'SMS' ? Icons.message : Icons.person, size: 14, color: Colors.grey),
-                                    const SizedBox(width: 4),
+                                    Icon(txn.source == 'SMS' ? Icons.message : Icons.person, size: 14, color: cs.onSurfaceVariant),
+                                    const SizedBox(width: AppSpacing.xs),
                                     Text(DateFormat('yyyy-MM-dd HH:mm').format(txn.timestamp)),
                                   ],
                                 ),
                                 trailing: Text(
-                                  '${txn.type == 'DEBIT' ? '-' : '+'} ₹${txn.amount.toStringAsFixed(2)}',
+                                  '${isDebit ? '-' : '+'} ₹${txn.amount.toStringAsFixed(2)}',
                                   style: TextStyle(
-                                    color: txn.type == 'DEBIT' ? Colors.red : Colors.green,
-                                    fontWeight: FontWeight.bold,
+                                    color: txnColor,
+                                    fontWeight: FontWeight.w700,
                                     fontSize: 16,
                                   ),
                                 ),
@@ -348,7 +480,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(
+            FilledButton(
               onPressed: () {
                 final amount = double.tryParse(amountController.text) ?? 0.0;
                 if (amount > 0 && merchantController.text.isNotEmpty) {
@@ -364,37 +496,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildSummaryCard(TransactionProvider provider) {
+  Widget _buildSummaryCard(BuildContext context, TransactionProvider provider) {
+    final cs = Theme.of(context).colorScheme;
     return Card(
-      margin: const EdgeInsets.all(16),
-      elevation: 4,
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      elevation: 0,
+      color: cs.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            Column(
-              children: [
-                const Text('Income', style: TextStyle(color: Colors.green)),
-                Text(
-                  '₹${provider.totalIncome.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green),
-                ),
-              ],
+            Expanded(
+              child: _summaryItem(context, 'Income', provider.totalIncome, AppColors.income(cs.brightness)),
             ),
-            Container(height: 40, width: 1, color: Colors.grey),
-            Column(
-              children: [
-                const Text('Expenses', style: TextStyle(color: Colors.red)),
-                Text(
-                  '₹${provider.totalExpense.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.red),
-                ),
-              ],
+            Container(height: 40, width: 1, color: cs.outlineVariant),
+            Expanded(
+              child: _summaryItem(context, 'Expenses', provider.totalExpense, AppColors.expense(cs.brightness)),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _summaryItem(BuildContext context, String label, double amount, Color color) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Text(label, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+        const SizedBox(height: AppSpacing.xs),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            '₹${amount.toStringAsFixed(2)}',
+            maxLines: 1,
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color),
+          ),
+        ),
+      ],
     );
   }
 }

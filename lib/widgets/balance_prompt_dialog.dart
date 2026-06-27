@@ -72,7 +72,7 @@ class _BalancePromptDialogState extends State<BalancePromptDialog> {
             isOpening
                 ? 'Enter your account balance as of the 1st of ${widget.prompt.monthName}'
                 : 'Enter your account balance as of the last day of ${widget.prompt.monthName}',
-            style: TextStyle(color: Colors.grey[700]),
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
           TextField(
@@ -93,7 +93,7 @@ class _BalancePromptDialogState extends State<BalancePromptDialog> {
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(false),
           child: const Text('Skip'),
         ),
-        ElevatedButton(
+        FilledButton(
           onPressed: _isLoading ? null : _saveBalance,
           child: _isLoading
               ? const SizedBox(

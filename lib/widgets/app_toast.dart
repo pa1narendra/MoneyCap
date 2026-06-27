@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 /// a new message had to wait out the previous one's full duration).
 /// Floating + swipe-to-dismiss so the user can flick it away at any time.
 void showToast(BuildContext context, String message, {bool isError = false}) {
+  final cs = Theme.of(context).colorScheme;
+  final bg = isError ? cs.error : cs.inverseSurface;
+  final fg = isError ? cs.onError : cs.onInverseSurface;
   final messenger = ScaffoldMessenger.of(context);
   messenger.clearSnackBars();
   messenger.showSnackBar(
@@ -16,14 +19,14 @@ void showToast(BuildContext context, String message, {bool isError = false}) {
         children: [
           Icon(
             isError ? Icons.error_outline : Icons.check_circle_outline,
-            color: Colors.white,
+            color: fg,
             size: 20,
           ),
           const SizedBox(width: 12),
           Flexible(
             child: Text(
               message,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
+              style: TextStyle(color: fg, fontSize: 14),
             ),
           ),
         ],
@@ -31,7 +34,7 @@ void showToast(BuildContext context, String message, {bool isError = false}) {
       duration: const Duration(milliseconds: 1800),
       behavior: SnackBarBehavior.floating,
       dismissDirection: DismissDirection.horizontal,
-      backgroundColor: isError ? const Color(0xFFD32F2F) : const Color(0xFF2E2E33),
+      backgroundColor: bg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       elevation: 6,
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
