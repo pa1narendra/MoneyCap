@@ -48,6 +48,11 @@ jobs:
           storeFile=moneycap-release.jks
           EOF
 
+      - name: Restore google-services.json (Firebase config)
+        env:
+          GS_B64: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: echo "$GS_B64" | base64 -d > android/app/google-services.json
+
       - name: Build signed release APK
         run: flutter build apk --release
 

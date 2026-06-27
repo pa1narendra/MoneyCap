@@ -5,6 +5,26 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-27
+### Changed
+- **Rebranded to MoneyCap** — new name, app/bundle ID `com.moneycap.app`, and package identifiers across Android/iOS/macOS/Linux/web.
+- **Reminders now delivered via FCM push instead of local notifications.** On-device scheduled alarms are silently dropped by aggressive battery managers (vivo, Xiaomi, Oppo, etc.); push reliably reaches the device. A scheduled GitHub Action sends the opening (1st, 9 AM IST) and closing (last day, 8 PM IST) reminders to FCM topics the app subscribes to.
+- **First-time SMS sync is ~10x faster** (~2 min → ~12 s): single-pass inbox read (removed O(n²) offset pagination), regex parsing moved to a background isolate, regexes compiled once, and batched single-transaction DB inserts.
+
+### Added
+- Shimmer **skeleton loader** while transactions load/sync (replaces the spinner).
+- **Floating toast** notifications — non-queuing, swipe-to-dismiss, with success/error styling (replaces all SnackBars).
+- **Automated signed releases** via GitHub Actions: pushing a `v*` tag builds a signed APK and publishes a GitHub Release.
+- Firebase Cloud Messaging integration (`firebase_core`, `firebase_messaging`) with topic subscriptions and foreground/background handling.
+
+### Removed
+- On-device AlarmManager scheduling, exact-alarm code, and `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` permissions (superseded by FCM push).
+- Stale build/analysis log files.
+
+### Fixed
+- Auto-sync toggle now reflects its state instantly instead of waiting for the sync to finish.
+- Corrected a broken Android NDK reference that prevented release builds.
+
 ## [1.0.0] - 2026-02-10
 ### Added
 - Monthly opening/closing balance tracking.

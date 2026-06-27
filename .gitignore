@@ -47,3 +47,8 @@ key.properties
 **/*.jks
 *.keystore
 install_app.bat
+
+# Firebase
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+**/firebase-service-account*.json

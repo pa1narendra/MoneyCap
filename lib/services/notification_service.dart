@@ -1,14 +1,19 @@
 import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:intl/intl.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:timezone/data/latest_all.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
 
+/// Thin wrapper around the local-notification plugin. Reminders themselves are
+/// delivered via FCM push (see [PushService]); this class is used to:
+///  - display a reminder while the app is in the FOREGROUND (FCM notification
+///    messages aren't shown automatically in that case), and
+///  - funnel notification taps into a single stream the dashboard listens to,
+///    so both local taps and FCM taps deep-link into reconciliation.
 class NotificationService {
   static final NotificationService instance = NotificationService._init();
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
-  bool _exactAlarmAllowed = true;
+
+  static const _channelId = 'balance_reminders';
+  static const _channelName = 'Balance Reminders';
+  static const _channelDescription = 'Monthly balance entry reminders';
 
   final StreamController<String> _notificationTapController =
       StreamController<String>.broadcast();
@@ -16,10 +21,8 @@ class NotificationService {
 
   NotificationService._init();
 
-  // Initialize notifications and request permission
+  // Initialize the plugin and request notification permission.
   Future<void> initialize() async {
-    tz.initializeTimeZones();
-
     const androidSettings = AndroidInitializationSettings('@mipmap/launcher_icon');
     const initSettings = InitializationSettings(android: androidSettings);
 
@@ -28,15 +31,25 @@ class NotificationService {
       onDidReceiveNotificationResponse: _handleNotificationTap,
     );
 
-    // Request permission (Android 13+)
-    await _notifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    final android = _notifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
 
-    await _loadAndroidExactAlarmPermission();
+    // Request permission (Android 13+)
+    await android?.requestNotificationsPermission();
+
+    // Create the channel up front so background FCM notifications (displayed by
+    // the system while the app is killed) land in the right channel.
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _channelId,
+        _channelName,
+        description: _channelDescription,
+        importance: Importance.high,
+      ),
+    );
   }
 
-  // Check if app was launched from a notification
+  // Check if app was launched by tapping a (locally shown) notification.
   Future<String?> getInitialPayload() async {
     final details = await _notifications.getNotificationAppLaunchDetails();
     if (details?.didNotificationLaunchApp == true &&
@@ -46,74 +59,33 @@ class NotificationService {
     return null;
   }
 
-  // Schedule notifications for next 12 months
-  Future<void> scheduleMonthlyBalanceNotifications() async {
-    // Cancel all existing notifications first
-    await _notifications.cancelAll();
-
-    final now = DateTime.now();
-
-    for (int i = 0; i < 12; i++) {
-      final targetMonth = DateTime(now.year, now.month + i, 1);
-      final monthName = DateFormat('MMMM yyyy').format(targetMonth);
-
-      // Schedule opening balance notification (1st at 9 AM)
-      final openingDate = DateTime(targetMonth.year, targetMonth.month, 1, 9, 0);
-      if (openingDate.isAfter(now)) {
-        await _scheduleNotification(
-          id: i * 2,
-          title: 'Opening Balance Required',
-          body: 'Enter your opening balance for $monthName',
-          scheduledDate: openingDate,
-          payload: 'opening:${DateFormat('yyyy-MM').format(targetMonth)}',
-        );
-      }
-
-      // Schedule closing balance notification (last day at 8 PM)
-      final lastDay = DateTime(targetMonth.year, targetMonth.month + 1, 0).day;
-      final closingDate = DateTime(targetMonth.year, targetMonth.month, lastDay, 20, 0);
-      if (closingDate.isAfter(now)) {
-        await _scheduleNotification(
-          id: i * 2 + 1,
-          title: 'Closing Balance Required',
-          body: 'Enter your closing balance for $monthName',
-          scheduledDate: closingDate,
-          payload: 'closing:${DateFormat('yyyy-MM').format(targetMonth)}',
-        );
-      }
-    }
-  }
-
-  Future<void> _scheduleNotification({
-    required int id,
+  /// Display a reminder immediately (used for foreground FCM messages).
+  Future<void> showReminder({
     required String title,
     required String body,
-    required DateTime scheduledDate,
     required String payload,
   }) async {
-    final tzScheduledDate = tz.TZDateTime.from(scheduledDate, tz.local);
-    final scheduleMode = _exactAlarmAllowed
-        ? AndroidScheduleMode.exactAllowWhileIdle
-        : AndroidScheduleMode.inexactAllowWhileIdle;
-
-    await _notifications.zonedSchedule(
-      id,
+    await _notifications.show(
+      payload.hashCode,
       title,
       body,
-      tzScheduledDate,
       const NotificationDetails(
         android: AndroidNotificationDetails(
-          'balance_reminders',
-          'Balance Reminders',
-          channelDescription: 'Monthly balance entry reminders',
+          _channelId,
+          _channelName,
+          channelDescription: _channelDescription,
           importance: Importance.high,
           priority: Priority.high,
         ),
       ),
-      androidScheduleMode: scheduleMode,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       payload: payload,
     );
+  }
+
+  /// Emit a tap payload (e.g. from an FCM notification tap) into the shared
+  /// stream so the dashboard handles it the same way as a local-notification tap.
+  void emitTap(String payload) {
+    _notificationTapController.add(payload);
   }
 
   void _handleNotificationTap(NotificationResponse response) {
@@ -122,23 +94,7 @@ class NotificationService {
     }
   }
 
-  // Cancel all notifications
-  Future<void> cancelAll() async {
-    await _notifications.cancelAll();
-  }
-
   void dispose() {
     _notificationTapController.close();
-  }
-
-  Future<void> _loadAndroidExactAlarmPermission() async {
-    final status = await Permission.scheduleExactAlarm.status;
-    if (status.isGranted) {
-      _exactAlarmAllowed = true;
-      return;
-    }
-
-    final requested = await Permission.scheduleExactAlarm.request();
-    _exactAlarmAllowed = requested.isGranted;
   }
 }

@@ -1,4 +1,5 @@
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'parser_service.dart';
@@ -6,7 +7,6 @@ import 'db_service.dart';
 
 class SmsService {
   final SmsQuery _query = SmsQuery();
-  final ParserService _parser = ParserService();
   final DatabaseHelper _db = DatabaseHelper.instance;
 
   Future<void> syncSms() async {
@@ -16,57 +16,87 @@ class SmsService {
     }
     
     if (await Permission.sms.isGranted) {
+      final sw = Stopwatch()..start();
       final lastSync = await _db.getLatestTimestamp();
+      final bool firstRun = lastSync == null;
+
+      const int safetyLimit = 10000; // hard cap to avoid runaways on odd devices
+
+      // READING is the dominant cost. Offset paging (querySms with a growing
+      // `start`) is ~O(n^2) because each call re-skips earlier rows. So on a
+      // first run we read the whole inbox in ONE pass; incremental runs read
+      // small pages and stop early at lastSync.
+      final int readPage = firstRun ? safetyLimit : 200;
+      // PROCESSING (parse on a background isolate + batched insert) is done in
+      // small chunks so a big single read still feels smooth — each chunk yields
+      // a frame, keeping the skeleton shimmer animating.
+      const int processChunk = 1000;
+
       bool isFinished = false;
       int start = 0;
-      int batchSize = 200;
-      int safetyLimit = 10000; // Stop after 10k messages to prevent infinite loops on weird devices
       int totalChecked = 0;
+      int totalInserted = 0;
+      int readMs = 0, parseMs = 0, insertMs = 0;
 
       while (!isFinished && totalChecked < safetyLimit) {
-        List<SmsMessage> messages = await _query.querySms(
+        final t = Stopwatch()..start();
+        final messages = await _query.querySms(
           kinds: [SmsQueryKind.inbox],
-          sort: true, // sort by date (Newest first)
-          count: batchSize,
+          sort: true, // newest first
+          count: readPage,
           start: start,
         );
+        readMs += t.elapsedMilliseconds;
 
-        if (messages.isEmpty) {
-          isFinished = true;
-          break;
-        }
+        if (messages.isEmpty) break;
 
+        // Collect qualifying raw records (cheap date checks on the main isolate).
+        final raws = <Map<String, dynamic>>[];
         for (var msg in messages) {
           if (msg.date == null) continue;
 
-          // incremental sync optimization:
-          // If we have a lastSync date, and we reach a message older than that,
-          // we can assume we've seen everything else (since it's sorted).
+          // Sorted newest-first: once we pass lastSync, everything else is older.
           if (lastSync != null && msg.date!.isBefore(lastSync)) {
-             isFinished = true;
-             break;
+            isFinished = true;
+            break;
           }
-          
-          // Even equal timestamps should be checked to be safe, 
-          // but avoiding strict duplicates is handled by DB primary key or logic?
-          // Actually DB.create doesn't check duplicates unless we query first.
-          // But for now, let's just parse.
-          if (lastSync != null && !msg.date!.isAfter(lastSync)) {
-             continue;
-          }
+          // Skip messages already imported (at or before lastSync).
+          if (lastSync != null && !msg.date!.isAfter(lastSync)) continue;
 
-          var txn = _parser.parseSms(msg);
-          if (txn != null) {
-            await _db.create(txn);
-          }
+          raws.add({
+            'body': msg.body,
+            'address': msg.address,
+            'date': msg.date!.millisecondsSinceEpoch,
+          });
         }
-        
-        start += batchSize;
+
+        // Parse + insert in small chunks (background isolate per chunk), yielding
+        // a frame between each so the UI never freezes even on a huge first read.
+        for (int i = 0; i < raws.length; i += processChunk) {
+          final end =
+              (i + processChunk < raws.length) ? i + processChunk : raws.length;
+          final sub = raws.sublist(i, end);
+
+          t.reset();
+          final txnMaps = await compute(parseSmsBatch, sub);
+          parseMs += t.elapsedMilliseconds;
+
+          t.reset();
+          await _db.createAllRaw(txnMaps);
+          insertMs += t.elapsedMilliseconds;
+          totalInserted += txnMaps.length;
+
+          await Future.delayed(Duration.zero); // yield a frame
+        }
+
+        start += readPage;
         totalChecked += messages.length;
-        
-        // Small delay to yield UI thread if needed (optional but good for Flutter)
-        await Future.delayed(const Duration(milliseconds: 10));
       }
+
+      sw.stop();
+      debugPrint('SMS sync: scanned $totalChecked, inserted $totalInserted in '
+          '${sw.elapsedMilliseconds}ms (read ${readMs}ms, parse ${parseMs}ms, '
+          'insert ${insertMs}ms)');
     }
   }
 }

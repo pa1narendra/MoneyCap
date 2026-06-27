@@ -4,6 +4,7 @@ import '../services/balance_service.dart';
 import '../services/db_service.dart';
 import '../providers/transaction_provider.dart';
 import 'package:provider/provider.dart';
+import '../widgets/app_toast.dart';
 
 class ReconciliationScreen extends StatefulWidget {
   final String? initialMonth;
@@ -50,9 +51,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     await _db.markReconciled(_selectedMonth!);
     _loadData();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Month marked as reconciled')),
-    );
+    showToast(context, 'Month marked as reconciled');
   }
 
   Future<void> _pickMonth() async {
@@ -121,9 +120,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
             onPressed: () async {
               final amount = double.tryParse(controller.text);
               if (amount == null || amount < 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a valid amount')),
-                );
+                showToast(context, 'Please enter a valid amount', isError: true);
                 return;
               }
               if (isOpening) {
@@ -133,11 +130,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
               }
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${isOpening ? "Opening" : "Closing"} balance saved!'),
-                ),
-              );
+              showToast(context, '${isOpening ? "Opening" : "Closing"} balance saved!');
               _loadData();
             },
             child: const Text('Save'),

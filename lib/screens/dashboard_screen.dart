@@ -5,8 +5,11 @@ import 'package:intl/intl.dart';
 import '../providers/transaction_provider.dart';
 import '../widgets/filter_dialog.dart';
 import '../widgets/balance_prompt_dialog.dart';
+import '../widgets/skeleton_loader.dart';
+import '../widgets/app_toast.dart';
 import '../services/balance_service.dart';
 import '../services/notification_service.dart';
+import '../services/push_service.dart';
 import 'stats_screen.dart';
 import 'reconciliation_screen.dart';
 
@@ -59,18 +62,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _initializeNotifications() async {
     try {
       await NotificationService.instance.initialize();
-      await NotificationService.instance.scheduleMonthlyBalanceNotifications();
 
-      // Check if app was launched from a notification
+      // Listen for taps (both local foreground notifications and FCM taps are
+      // funnelled into this stream) BEFORE init so nothing is missed.
+      _notificationSub = NotificationService.instance.onNotificationTap.listen(
+        _handleNotificationPayload,
+      );
+
+      // App launched by tapping a locally shown notification.
       final initialPayload = await NotificationService.instance.getInitialPayload();
       if (initialPayload != null) {
         _handleNotificationPayload(initialPayload);
       }
 
-      // Listen for future notification taps
-      _notificationSub = NotificationService.instance.onNotificationTap.listen(
-        _handleNotificationPayload,
-      );
+      // Reminders are delivered via FCM push (reliable even on OEMs that block
+      // local AlarmManager notifications). Subscribe + wire up tap handling.
+      await PushService.instance.init();
     } catch (e) {
       debugPrint('Error initializing notifications: $e');
     }
@@ -121,13 +128,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Finance Manager'),
+        title: const Text('MoneyCap'),
         actions: [
           Switch(
             value: provider.isAutoSync,
             onChanged: (val) {
               provider.toggleAutoSync(val);
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Auto Sync ${val ? "Enabled" : "Disabled"}')));
+              showToast(context, 'Auto Sync ${val ? "Enabled" : "Disabled"}');
             },
           ),
           PopupMenuButton<String>(
@@ -148,7 +155,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         onPressed: () {
                           provider.clearAll();
                           Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Data Reset Complete')));
+                          showToast(context, 'Data Reset Complete');
                         },
                         child: const Text('Reset', style: TextStyle(color: Colors.red)),
                       ),
@@ -175,7 +182,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
       body: provider.isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const DashboardSkeleton()
           : RefreshIndicator(
               onRefresh: provider.syncSms,
               child: Column(
@@ -280,7 +287,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Navigator.pop(ctx);
               await provider.syncSms();
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Synced!')));
+              showToast(context, 'Synced!');
             },
           ),
           ListTile(

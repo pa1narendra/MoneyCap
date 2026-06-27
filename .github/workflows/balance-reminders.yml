@@ -1,0 +1,121 @@
+name: Monthly Balance Reminders
+
+# Sends FCM push reminders to the app's topics:
+#   - balance_opening : 1st of the month, 09:00 IST
+#   - balance_closing : last day of the month, 20:00 IST
+# Reminders contain only generic text — no user/financial data.
+
+on:
+  schedule:
+    # 03:30 UTC = 09:00 IST on the 1st  -> opening reminder
+    - cron: "30 3 1 * *"
+    # 14:30 UTC = 20:00 IST on days 28-31 -> closing reminder (guarded to last day)
+    - cron: "30 14 28-31 * *"
+  workflow_dispatch:
+    inputs:
+      type:
+        description: "Force a reminder now (for testing). 'auto' uses the date."
+        required: false
+        default: "auto"
+        type: choice
+        options: [auto, opening, closing]
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide which reminder to send (IST)
+        id: decide
+        run: |
+          set -euo pipefail
+          export TZ="Asia/Kolkata"
+          TODAY_DAY=$(date +%d)
+          TOMORROW_DAY=$(date -d "tomorrow" +%d)
+          MONTH=$(date +%Y-%m)
+          MONTH_NAME=$(date +'%B %Y')
+
+          FORCED="${{ github.event.inputs.type || 'auto' }}"
+          TYPE=""
+          if [ "$FORCED" = "opening" ] || [ "$FORCED" = "closing" ]; then
+            TYPE="$FORCED"
+          elif [ "$TODAY_DAY" = "01" ]; then
+            TYPE="opening"
+          elif [ "$TOMORROW_DAY" = "01" ]; then
+            TYPE="closing"   # today is the last day of the month
+          fi
+
+          if [ -z "$TYPE" ]; then
+            echo "Not a reminder day (IST $MONTH-$TODAY_DAY); nothing to send."
+            echo "send=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Sending '$TYPE' reminder for $MONTH_NAME."
+            echo "send=true" >> "$GITHUB_OUTPUT"
+            echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+            echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+            echo "month_name=$MONTH_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.decide.outputs.send == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        if: steps.decide.outputs.send == 'true'
+        run: pip install --quiet google-auth requests
+
+      - name: Send FCM push to topic
+        if: steps.decide.outputs.send == 'true'
+        env:
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+          FCM_PROJECT_ID: ${{ secrets.FCM_PROJECT_ID }}
+          REMINDER_TYPE: ${{ steps.decide.outputs.type }}
+          REMINDER_MONTH: ${{ steps.decide.outputs.month }}
+          REMINDER_MONTH_NAME: ${{ steps.decide.outputs.month_name }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from google.oauth2 import service_account
+          import google.auth.transport.requests
+          import requests
+
+          sa = json.loads(os.environ["FCM_SERVICE_ACCOUNT"])
+          project_id = os.environ["FCM_PROJECT_ID"]
+          rtype = os.environ["REMINDER_TYPE"]
+          month = os.environ["REMINDER_MONTH"]
+          month_name = os.environ["REMINDER_MONTH_NAME"]
+
+          creds = service_account.Credentials.from_service_account_info(
+              sa, scopes=["https://www.googleapis.com/auth/firebase.messaging"]
+          )
+          creds.refresh(google.auth.transport.requests.Request())
+
+          topic = "balance_opening" if rtype == "opening" else "balance_closing"
+          title = "Opening Balance Required" if rtype == "opening" else "Closing Balance Required"
+          body = f"Enter your {rtype} balance for {month_name}"
+
+          message = {
+              "message": {
+                  "topic": topic,
+                  "notification": {"title": title, "body": body},
+                  "data": {"type": rtype, "month": month},
+                  "android": {
+                      "priority": "high",
+                      "notification": {"channel_id": "balance_reminders"},
+                  },
+              }
+          }
+
+          resp = requests.post(
+              f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send",
+              headers={
+                  "Authorization": f"Bearer {creds.token}",
+                  "Content-Type": "application/json; UTF-8",
+              },
+              data=json.dumps(message),
+              timeout=30,
+          )
+          print("FCM response:", resp.status_code, resp.text)
+          resp.raise_for_status()
+          PY

@@ -11,7 +11,7 @@ class DatabaseHelper {
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('finance_tracker.db');
+    _database = await _initDB('moneycap.db');
     return _database!;
   }
 
@@ -89,6 +89,28 @@ CREATE TABLE monthly_balances (
   Future<int> create(TransactionModel transaction) async {
     final db = await instance.database;
     return await db.insert('transactions', transaction.toMap());
+  }
+
+  /// Insert many transactions in a SINGLE transaction (one fsync instead of one
+  /// per row). This is the difference between a multi-minute first sync and a
+  /// few-second one when thousands of SMS are imported.
+  Future<void> createAll(List<TransactionModel> transactions) async {
+    if (transactions.isEmpty) return;
+    await createAllRaw(transactions.map((t) => t.toMap()).toList());
+  }
+
+  /// Batch-insert pre-built column maps (e.g. produced off-isolate by the
+  /// parser). Each map must match the `transactions` columns; any `id` is
+  /// dropped so AUTOINCREMENT assigns it.
+  Future<void> createAllRaw(List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return;
+    final db = await instance.database;
+    final batch = db.batch();
+    for (final row in rows) {
+      final r = Map<String, dynamic>.from(row)..remove('id');
+      batch.insert('transactions', r);
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<DateTime?> getLatestTimestamp() async {

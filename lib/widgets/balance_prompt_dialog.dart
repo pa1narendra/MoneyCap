@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/balance_service.dart';
 import '../services/db_service.dart';
+import 'app_toast.dart';
 
 class BalancePromptDialog extends StatefulWidget {
   final BalancePrompt prompt;
@@ -25,9 +26,7 @@ class _BalancePromptDialogState extends State<BalancePromptDialog> {
   Future<void> _saveBalance() async {
     final amount = double.tryParse(_amountController.text);
     if (amount == null || amount < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid amount')),
-      );
+      showToast(context, 'Please enter a valid amount', isError: true);
       return;
     }
 
@@ -42,18 +41,13 @@ class _BalancePromptDialogState extends State<BalancePromptDialog> {
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${widget.prompt.type == PromptType.opening ? "Opening" : "Closing"} balance saved!',
-          ),
-        ),
+      showToast(
+        context,
+        '${widget.prompt.type == PromptType.opening ? "Opening" : "Closing"} balance saved!',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving balance: $e')),
-      );
+      showToast(context, 'Error saving balance: $e', isError: true);
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);

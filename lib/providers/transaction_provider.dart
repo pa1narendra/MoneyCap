@@ -99,11 +99,14 @@ class TransactionProvider with ChangeNotifier {
 
   // Toggle AutoSync
   Future<void> toggleAutoSync(bool value) async {
+      // Reflect the switch immediately, BEFORE persisting/syncing, so the
+      // toggle never appears to hang while the sync runs.
       _isAutoSync = value;
+      notifyListeners();
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('auto_sync', value);
-      notifyListeners();
-      
+
       if (value) {
           syncSms();
       }

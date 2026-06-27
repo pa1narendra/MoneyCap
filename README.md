@@ -1,4 +1,4 @@
-# Finance Tracker
+# MoneyCap
 
 A personal expense tracker that reads payment SMSes to log transactions
 automatically — no manual entry required, no banking-app access, no cloud.
@@ -230,7 +230,7 @@ Requires Flutter 3.x and Android Studio (or a connected Android device).
 
 ```bash
 git clone https://github.com/pa1narendra/MoneyCap.git
-cd finance-manager
+cd MoneyCap
 
 flutter pub get
 flutter run
