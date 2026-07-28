@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
+
+## [2.1.0] - 2026-06-27
 ### Added
 - App launcher icon.
 - Indigo light/dark theme that follows the system setting, plus an in-app theme switcher (System / Light / Dark).
@@ -11,6 +13,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ### Changed
 - UI redesign across the dashboard, stats, and reconciliation screens — flat themed cards, consistent spacing, semantic income/expense colors, and themed dialogs/toasts that adapt to light and dark.
+- Dashboard now defaults to the current month's transactions instead of "All" (All is still available in the date filter).
 
 ### Fixed
 - Layout overflows in the date-filter sheet and the dashboard summary card.

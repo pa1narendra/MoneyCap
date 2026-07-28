@@ -28,7 +28,7 @@ class TransactionProvider with ChangeNotifier {
   List<TransactionModel> _transactions = [];
   bool _isLoading = false;
   
-  TimeFilter _activeFilter = TimeFilter.all;
+  TimeFilter _activeFilter = TimeFilter.thisMonth;
   DateTimeRange? _customDateRange;
 
   bool _isAutoSync = false;
