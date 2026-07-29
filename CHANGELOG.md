@@ -5,6 +5,11 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-29
+### Fixed
+- Duplicate transactions when the same bank SMS is delivered more than once (a telecom glitch). Transactions are now de-duplicated by their bank reference number (falling back to the message text), so re-delivered messages collapse into a single entry.
+- Credit-card bill payments were misclassified as income (CREDIT) because the acknowledgment SMS says "payment ... credited to your card". Payments toward a card are now correctly recorded as an expense (DEBIT), while card cashback/refunds remain CREDIT.
+
 ## [2.1.0] - 2026-06-27
 ### Added
 - App launcher icon.

@@ -28,6 +28,21 @@ class ParserService {
   // 5. Spam/Marketing keywords (To ignore)
   static final RegExp _spamRegex = RegExp(r'\b(claim|offer|won|prize|lottery|eligible|apply|marketing)\b', caseSensitive: false);
 
+  // 6. Bank/UPI reference number — used to de-duplicate the same SMS if a
+  // telecom glitch delivers it multiple times. UPI refs/RRNs are 6-16 digits.
+  static final RegExp _refRegex = RegExp(
+      r'(?:ref(?:erence)?|rrn|utr|upi|txn|transaction|imps|neft)\s*(?:no\.?|number|id|#)?\s*[:\-#.]?\s*(\d{6,})',
+      caseSensitive: false);
+  static final RegExp _wsRegex = RegExp(r'\s+');
+
+  // 7. Credit-card bill payment: money the user PAID OUT, but its SMS reads as a
+  // credit — e.g. "Payment of Rs X was credited to your card" — which trips the
+  // credit keywords. The reliable discriminator is a "payment"/"bill" mentioned
+  // together with a "card". Card cashback/refunds say "cashback"/"refund" and
+  // never "payment", so they correctly stay CREDIT.
+  static final RegExp _cardRegex = RegExp(r'\bcard\b', caseSensitive: false);
+  static final RegExp _billPaymentRegex = RegExp(r'\bpayment\b|\bbill\b', caseSensitive: false);
+
   TransactionModel? parseSms(SmsMessage message) =>
       parseFields(message.body, message.address, message.date);
 
@@ -55,7 +70,13 @@ class ParserService {
     
     String type = '';
 
-    if (hasCreditKeyword) {
+    // Highest priority: a credit-card bill payment is outgoing for the user,
+    // even though its SMS says "received". Check before the credit keyword.
+    final isCardBillPayment = _cardRegex.hasMatch(body) && _billPaymentRegex.hasMatch(body);
+
+    if (isCardBillPayment) {
+        type = 'DEBIT';
+    } else if (hasCreditKeyword) {
         type = 'CREDIT';
     } else if (hasDebitKeyword) {
         type = 'DEBIT';
@@ -111,6 +132,16 @@ class ParserService {
         merchant = '${merchant.substring(0, 20)}...';
     }
 
+    // De-dup signature: the same transaction always carries the same bank
+    // reference number, so a re-delivered SMS collapses to one row. When no
+    // reference is present, fall back to the normalized message text (identical
+    // re-deliveries still match). Amount is folded in to avoid a stray ref
+    // collision merging two genuinely different transactions.
+    final refMatch = _refRegex.firstMatch(body);
+    final dedupKey = refMatch != null
+        ? 'r:${refMatch.group(1)}:${amount.toStringAsFixed(2)}'
+        : 'b:${body.toLowerCase().replaceAll(_wsRegex, ' ').trim()}';
+
     return TransactionModel(
       amount: amount,
       type: type,
@@ -118,6 +149,7 @@ class ParserService {
       timestamp: date ?? DateTime.now(),
       body: body,
       source: 'SMS',
+      dedupKey: dedupKey,
     );
   }
 }

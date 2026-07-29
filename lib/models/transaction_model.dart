@@ -7,6 +7,7 @@ class TransactionModel {
   DateTime timestamp;
   String body;
   String source; // 'SMS' or 'MANUAL'
+  String? dedupKey; // stable signature so re-delivered SMS collapse to one row
 
   TransactionModel({
     this.id,
@@ -16,6 +17,7 @@ class TransactionModel {
     required this.timestamp,
     required this.body,
     this.source = 'SMS', // Default to SMS for backward compatibility if needed, but we will migrate DB
+    this.dedupKey,
   });
 
   Map<String, dynamic> toMap() {
@@ -27,6 +29,7 @@ class TransactionModel {
       'timestamp': timestamp.millisecondsSinceEpoch,
       'body': body,
       'source': source,
+      'dedup_key': dedupKey,
     };
   }
 
@@ -39,6 +42,7 @@ class TransactionModel {
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp']),
       body: map['body'],
       source: map['source'] ?? 'SMS', // Default for old records
+      dedupKey: map['dedup_key'],
     );
   }
 }

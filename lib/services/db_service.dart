@@ -21,7 +21,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3, // Increment version for monthly_balances
+      version: 4, // v4: dedup_key on transactions
       onCreate: _createDB,
       onUpgrade: _upgradeDB, // Handle migration
     );
@@ -34,18 +34,23 @@ class DatabaseHelper {
     const integerType = 'INTEGER NOT NULL';
 
     await db.execute('''
-CREATE TABLE transactions ( 
-  id $idType, 
+CREATE TABLE transactions (
+  id $idType,
   amount $realType,
   type $textType,
   merchant $textType,
   timestamp $integerType,
   body $textType,
-  source $textType
+  source $textType,
+  dedup_key TEXT
   )
 ''');
     // Index for faster sorting and filtering by date
     await db.execute('CREATE INDEX idx_timestamp ON transactions (timestamp)');
+    // Unique signature per SMS transaction so re-delivered messages can't create
+    // duplicate rows. Partial (NULL excluded) so manual entries are never merged.
+    await db.execute(
+        'CREATE UNIQUE INDEX idx_dedup ON transactions(dedup_key) WHERE dedup_key IS NOT NULL');
     
     // Monthly balances table
     await db.execute('''
@@ -84,6 +89,14 @@ CREATE TABLE monthly_balances (
 ''');
       await db.execute('CREATE UNIQUE INDEX idx_month ON monthly_balances (month)');
     }
+    if (oldVersion < 4) {
+      // Add the de-dup signature column + a partial unique index. Existing rows
+      // stay NULL (excluded from the index) so the migration can't fail on any
+      // duplicates already present; dedup applies to all future inserts.
+      await db.execute('ALTER TABLE transactions ADD COLUMN dedup_key TEXT');
+      await db.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS idx_dedup ON transactions(dedup_key) WHERE dedup_key IS NOT NULL');
+    }
   }
 
   Future<int> create(TransactionModel transaction) async {
@@ -108,7 +121,9 @@ CREATE TABLE monthly_balances (
     final batch = db.batch();
     for (final row in rows) {
       final r = Map<String, dynamic>.from(row)..remove('id');
-      batch.insert('transactions', r);
+      // Skip rows whose dedup_key already exists (re-delivered SMS) instead of
+      // failing the whole batch.
+      batch.insert('transactions', r, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     await batch.commit(noResult: true);
   }
