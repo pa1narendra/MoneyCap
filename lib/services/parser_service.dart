@@ -28,6 +28,32 @@ class ParserService {
   // 5. Spam/Marketing keywords (To ignore)
   static final RegExp _spamRegex = RegExp(r'\b(claim|offer|won|prize|lottery|eligible|apply|marketing)\b', caseSensitive: false);
 
+  // 5b. Promotional / informational messages — EMI-conversion offers
+  // ("convert spends ... to EMI"), pre-approved loans, reward/upgrade pitches,
+  // and T&C footers. They quote an amount but are NOT transactions, so they must
+  // be dropped BEFORE type detection (a promo can contain "spent"/"paid" too).
+  // Note: "convert" (offer imperative) is filtered, but "converted"/"debited"
+  // (a real EMI installment) is not — so genuine EMI debits still record.
+  // NOTE: deliberately does NOT include "via" — real transactions say
+  // "debited via UPI / paid via IMPS / via NetBanking" all the time.
+  static final RegExp _promoRegex = RegExp(
+      r'\bconvert\b'
+      r'|\bhurry\b'
+      r'|t&c|terms\s*(?:and|&)\s*conditions'
+      r'|\bavail\b|\bexclusive\b'
+      r'|limited\s*(?:period|time|offer)'
+      r'|pre-?approved|pre-?qualified'
+      r'|cashback\s+offer'
+      r'|\bdiscount\b'
+      r'|\d+\s*%\s*off'
+      r'|(?:book|shop|buy)\s+now'
+      r'|lowest\s+interest|instant\s+(?:loan|approval)|loan\s+offer'
+      r'|congratulations|congrats'
+      r'|\bbenefits?\b'
+      r'|@\s*\d+(?:\.\d+)?\s*%' // interest-rate offers e.g. "@10.5%"
+      r'|\bunsubscribe\b|opt[-\s]?out|upgrade\s+your',
+      caseSensitive: false);
+
   // 6. Bank/UPI reference number — used to de-duplicate the same SMS if a
   // telecom glitch delivers it multiple times. UPI refs/RRNs are 6-16 digits.
   static final RegExp _refRegex = RegExp(
@@ -51,11 +77,11 @@ class ParserService {
     if (rawBody == null || rawBody.isEmpty) return null;
     String body = rawBody;
 
-    // 1. Anti-Spam Check
-    if (_spamRegex.hasMatch(body)) {
-        // Double check: if it has "spent" or "debited", it might be real (e.g. "spent 500 on loan payment")
-        // But usually "Claim 5000 loan" is spam.
-        // Let's be safe: if it has "claim" or "offer", it's 99% spam.
+    // 1. Anti-Spam / promotional filter. These quote an amount but are not
+    // transactions (EMI-conversion offers, pre-approved loans, "HURRY … % off",
+    // T&C footers). Checked first so a promo containing "spent"/"paid" can't leak
+    // through as a transaction.
+    if (_spamRegex.hasMatch(body) || _promoRegex.hasMatch(body)) {
         return null;
     }
 

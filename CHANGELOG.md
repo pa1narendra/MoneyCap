@@ -5,6 +5,10 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-07-29
+### Fixed
+- Promotional / informational SMS (EMI-conversion offers, "HURRY … % off", pre-approved loans, T&C footers, etc.) were being recorded as transactions because they quote an amount. They are now filtered out before parsing, while genuine transactions — including real EMI installment debits — are still recorded.
+
 ## [2.1.1] - 2026-07-29
 ### Fixed
 - Duplicate transactions when the same bank SMS is delivered more than once (a telecom glitch). Transactions are now de-duplicated by their bank reference number (falling back to the message text), so re-delivered messages collapse into a single entry.
