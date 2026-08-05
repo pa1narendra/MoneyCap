@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- READ_SMS only: the app reads existing bank SMS from the inbox to log
+         transactions. It does NOT use RECEIVE_SMS (intercepting incoming
+         messages) — that permission is what fraud/OTP-stealing apps use, and
+         declaring it triggers Play Protect's "financial fraud" warning. -->
     <uses-permission android:name="android.permission.READ_SMS"/>
-    <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="MoneyCap"

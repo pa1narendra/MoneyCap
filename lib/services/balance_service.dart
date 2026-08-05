@@ -9,30 +9,22 @@ class BalanceService {
     final now = DateTime.now();
     final month = DateFormat('yyyy-MM').format(now);
     final balance = await _db.getMonthlyBalance(month);
-    
-    // Check if it's the 1st of the month
-    if (now.day == 1) {
-      if (balance == null || balance['opening_balance'] == null) {
-        return BalancePrompt(
-          type: PromptType.opening,
-          month: month,
-          monthName: DateFormat('MMMM yyyy').format(now),
-        );
-      }
-    }
-    
-    // Check if it's the last day of the month
     final lastDay = DateTime(now.year, now.month + 1, 0).day;
-    if (now.day == lastDay) {
-      if (balance == null || balance['closing_balance'] == null) {
-        return BalancePrompt(
-          type: PromptType.closing,
-          month: month,
-          monthName: DateFormat('MMMM yyyy').format(now),
-        );
-      }
+    final monthName = DateFormat('MMMM yyyy').format(now);
+
+    // Opening: prompt during the FIRST FEW DAYS of the month (not just day 1) if
+    // it hasn't been recorded yet. This is the reliable fallback — a push that
+    // never arrives (device offline / OEM force-stop) still gets caught the next
+    // time the app is opened in early month, without depending on FCM at all.
+    if (now.day <= 5 && (balance == null || balance['opening_balance'] == null)) {
+      return BalancePrompt(type: PromptType.opening, month: month, monthName: monthName);
     }
-    
+
+    // Closing: prompt during the last few days of the month if not recorded.
+    if (now.day >= lastDay - 2 && (balance == null || balance['closing_balance'] == null)) {
+      return BalancePrompt(type: PromptType.closing, month: month, monthName: monthName);
+    }
+
     return null;
   }
 

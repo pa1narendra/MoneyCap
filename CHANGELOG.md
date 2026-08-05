@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
+### Changed
+- Removed the unused `RECEIVE_SMS` permission — the app only reads existing inbox messages, it never intercepts incoming SMS. This shrinks the permission footprint and reduces the "financial fraud" warning some devices show for apps that can intercept messages.
+
+### Fixed
+- Monthly balance reminders no longer depend solely on push. The app now prompts for the opening balance whenever it's opened during the first 5 days of the month (and the closing balance in the last 3 days) if not yet recorded — so a missed or OEM-blocked push no longer means a missed reminder.
 
 ## [2.1.2] - 2026-07-29
 ### Fixed
