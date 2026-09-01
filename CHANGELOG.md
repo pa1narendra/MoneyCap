@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
+
+## [2.2.0] - 2026-08-06
+### Added
+- **Search** transactions by merchant or amount (search icon in the app bar).
+- **Income / Expense toggle** to filter the transaction list — the income and expense totals still always show both.
+- **Edit or delete** any transaction — tap it to fix a wrong amount/merchant, flip income↔expense, or remove a stray entry.
+- **Export to CSV** — export the current view to a file via the system share sheet.
+- **Monthly spending trend** (last 6 months) on the Statistics screen.
+- **Compare months** — pick any two months on Statistics to see the spending/income **% change** and the transaction-count delta, with a plain-language insight (e.g. "You spent 15% more than last month").
+
+### Changed
+- When a closing balance doesn't reconcile, the app now offers to **add the missing transaction inline** — prefilled with the shortfall and the inferred income/expense type — instead of navigating to the reconciliation screen.
+
+## [2.1.3] - 2026-08-06
 ### Changed
 - Removed the unused `RECEIVE_SMS` permission — the app only reads existing inbox messages, it never intercepts incoming SMS. This shrinks the permission footprint and reduces the "financial fraud" warning some devices show for apps that can intercept messages.
 

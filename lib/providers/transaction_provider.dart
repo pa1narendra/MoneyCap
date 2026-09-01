@@ -21,6 +21,9 @@ enum TimeFilter {
   const TimeFilter(this.label);
 }
 
+/// Quick income/expense toggle for the transaction list.
+enum TypeFilter { all, income, expense }
+
 class TransactionProvider with ChangeNotifier {
   final SmsService _smsService = SmsService();
   final DatabaseHelper _db = DatabaseHelper.instance;
@@ -30,12 +33,16 @@ class TransactionProvider with ChangeNotifier {
   
   TimeFilter _activeFilter = TimeFilter.thisMonth;
   DateTimeRange? _customDateRange;
+  String _searchQuery = '';
+  TypeFilter _typeFilter = TypeFilter.all;
 
   bool _isAutoSync = false;
 
   List<TransactionModel> get transactions => _transactions;
   bool get isLoading => _isLoading;
   TimeFilter get activeFilter => _activeFilter;
+  String get searchQuery => _searchQuery;
+  TypeFilter get typeFilter => _typeFilter;
   bool get isAutoSync => _isAutoSync;
   
   // Computed Date Range based on filter
@@ -132,22 +139,43 @@ class TransactionProvider with ChangeNotifier {
       notifyListeners();
   }
 
-  // Filtered List
-  List<TransactionModel> get filteredTransactions {
+  // Date range + search text. The income/expense TOTALS use this, so both
+  // always show regardless of the income/expense list toggle.
+  List<TransactionModel> get _baseFiltered {
     final range = currentDateRange;
-    if (range == null) return _transactions;
-
-    return _transactions.where((txn) {
-      return txn.timestamp.isAfter(range.start.subtract(const Duration(milliseconds: 1))) && 
-             txn.timestamp.isBefore(range.end.add(const Duration(milliseconds: 1)));
-    }).toList();
+    Iterable<TransactionModel> list = _transactions;
+    if (range != null) {
+      final start = range.start.subtract(const Duration(milliseconds: 1));
+      final end = range.end.add(const Duration(milliseconds: 1));
+      list = list.where((t) => t.timestamp.isAfter(start) && t.timestamp.isBefore(end));
+    }
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      list = list.where((t) =>
+          t.merchant.toLowerCase().contains(q) ||
+          t.amount.toStringAsFixed(2).contains(q));
+    }
+    return list.toList();
   }
 
-  double get totalIncome => filteredTransactions
+  // What the list displays: base filter + the income/expense toggle.
+  List<TransactionModel> get filteredTransactions {
+    final base = _baseFiltered;
+    switch (_typeFilter) {
+      case TypeFilter.income:
+        return base.where((t) => t.type == 'CREDIT').toList();
+      case TypeFilter.expense:
+        return base.where((t) => t.type == 'DEBIT').toList();
+      case TypeFilter.all:
+        return base;
+    }
+  }
+
+  double get totalIncome => _baseFiltered
       .where((t) => t.type == 'CREDIT')
       .fold(0.0, (sum, item) => sum + item.amount);
 
-  double get totalExpense => filteredTransactions
+  double get totalExpense => _baseFiltered
       .where((t) => t.type == 'DEBIT')
       .fold(0.0, (sum, item) => sum + item.amount);
       
@@ -157,6 +185,38 @@ class TransactionProvider with ChangeNotifier {
         _customDateRange = customRange;
     }
     notifyListeners();
+  }
+
+  void setSearchQuery(String query) {
+    _searchQuery = query;
+    notifyListeners();
+  }
+
+  void setTypeFilter(TypeFilter type) {
+    _typeFilter = type;
+    notifyListeners();
+  }
+
+  // Edit / delete a single transaction.
+  Future<void> updateTransaction(TransactionModel txn) async {
+    await _db.update(txn);
+    await loadTransactions();
+  }
+
+  Future<void> deleteTransaction(int id) async {
+    await _db.delete(id);
+    await loadTransactions();
+  }
+
+  /// CSV of the current date/search view (all types), for export/backup.
+  String buildCsv() {
+    final buf = StringBuffer('Date,Type,Merchant,Amount,Source\n');
+    for (final t in _baseFiltered) {
+      final merchant = t.merchant.replaceAll('"', '""');
+      buf.writeln(
+          '${t.timestamp.toIso8601String()},${t.type},"$merchant",${t.amount.toStringAsFixed(2)},${t.source}');
+    }
+    return buf.toString();
   }
 
   Future<void> loadTransactions() async {

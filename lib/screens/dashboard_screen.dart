@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../providers/transaction_provider.dart';
 import '../providers/settings_provider.dart';
+import '../models/transaction_model.dart';
 import '../widgets/filter_dialog.dart';
 import '../widgets/balance_prompt_dialog.dart';
 import '../widgets/skeleton_loader.dart';
@@ -26,6 +30,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<String>? _notificationSub;
   bool _isBalanceDialogShown = false;
   bool _namePromptShown = false;
+  bool _searching = false;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -40,6 +46,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _notificationSub?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -57,7 +64,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _isBalanceDialogShown = false;
 
       if (saved == true && prompt.type == PromptType.closing && mounted) {
-        _navigateToReconciliation(prompt.month);
+        await _handleClosingMismatch(prompt.month);
       }
     }
   }
@@ -116,6 +123,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ReconciliationScreen(initialMonth: month)),
+    );
+  }
+
+  /// After a closing balance is entered, if it doesn't reconcile with the
+  /// recorded opening balance + transactions, offer to add the missing
+  /// transaction RIGHT HERE (prefilled with the shortfall + inferred type) —
+  /// no hop to the reconciliation screen. Only shows when there's a mismatch.
+  Future<void> _handleClosingMismatch(String month) async {
+    final disc = await BalanceService().getDiscrepancy(month);
+    // Needs both balances, and only prompts when it doesn't already reconcile.
+    if (disc == null || disc.discrepancy.abs() < 0.01) return;
+    if (!mounted) return;
+
+    final provider = context.read<TransactionProvider>();
+    final diff = disc.discrepancy;
+    final isMissingCredit = diff > 0; // actual > expected → missing income
+    final amountController = TextEditingController(text: diff.abs().toStringAsFixed(2));
+    final merchantController = TextEditingController();
+    String type = isMissingCredit ? 'CREDIT' : 'DEBIT';
+
+    final parts = month.split('-');
+    final year = int.parse(parts[0]);
+    final monthNum = int.parse(parts[1]);
+    DateTime selectedDate = DateTime(year, monthNum + 1, 0); // last day of month
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text("Balance doesn't match"),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Your records are off by ₹${diff.abs().toStringAsFixed(2)}. '
+                  'This looks like a missing ${isMissingCredit ? "income" : "expense"} — add it to reconcile.',
+                ),
+                const SizedBox(height: AppSpacing.md),
+                InkWell(
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: selectedDate,
+                      firstDate: DateTime(year, monthNum, 1),
+                      lastDate: DateTime(year, monthNum + 1, 0),
+                    );
+                    if (picked != null) setState(() => selectedDate = picked);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.calendar_today, size: 18),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(DateFormat('MMM d, yyyy').format(selectedDate)),
+                        const Spacer(),
+                        const Icon(Icons.edit, size: 16),
+                      ],
+                    ),
+                  ),
+                ),
+                TextField(
+                  controller: amountController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ '),
+                ),
+                TextField(
+                  controller: merchantController,
+                  decoration: const InputDecoration(labelText: 'Merchant / Description'),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  children: [
+                    const Text('Type: '),
+                    DropdownButton<String>(
+                      value: type,
+                      items: const [
+                        DropdownMenuItem(value: 'DEBIT', child: Text('Expense')),
+                        DropdownMenuItem(value: 'CREDIT', child: Text('Income')),
+                      ],
+                      onChanged: (v) => setState(() => type = v!),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Not now')),
+            FilledButton(
+              onPressed: () async {
+                final amount = double.tryParse(amountController.text);
+                if (amount == null || amount <= 0 || merchantController.text.trim().isEmpty) return;
+                await provider.addTransaction(amount, type, merchantController.text.trim(), date: selectedDate);
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) showToast(context, 'Missing transaction added');
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -208,6 +319,129 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Navigator.pop(ctx);
   }
 
+  void _showTransactionActions(BuildContext context, TransactionProvider provider, TransactionModel txn) {
+    final cs = Theme.of(context).colorScheme;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('Edit'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showEditTransactionDialog(context, provider, txn);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_outline, color: cs.error),
+              title: Text('Delete', style: TextStyle(color: cs.error)),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (dctx) => AlertDialog(
+                    title: const Text('Delete transaction?'),
+                    content: Text('${txn.merchant} · ₹${txn.amount.toStringAsFixed(2)}'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                      FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: cs.error),
+                        onPressed: () => Navigator.pop(dctx, true),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true && txn.id != null) {
+                  await provider.deleteTransaction(txn.id!);
+                  if (context.mounted) showToast(context, 'Transaction deleted');
+                }
+              },
+            ),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditTransactionDialog(BuildContext context, TransactionProvider provider, TransactionModel txn) {
+    final amountController = TextEditingController(text: txn.amount.toStringAsFixed(2));
+    final merchantController = TextEditingController(text: txn.merchant);
+    String type = txn.type;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Edit Transaction'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: amountController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ '),
+              ),
+              TextField(
+                controller: merchantController,
+                decoration: const InputDecoration(labelText: 'Merchant / Description'),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  const Text('Type: '),
+                  DropdownButton<String>(
+                    value: type,
+                    items: const [
+                      DropdownMenuItem(value: 'DEBIT', child: Text('Expense')),
+                      DropdownMenuItem(value: 'CREDIT', child: Text('Income')),
+                    ],
+                    onChanged: (val) => setState(() => type = val!),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () async {
+                final amount = double.tryParse(amountController.text);
+                if (amount == null || amount <= 0 || merchantController.text.trim().isEmpty) return;
+                txn.amount = amount;
+                txn.merchant = merchantController.text.trim();
+                txn.type = type;
+                await provider.updateTransaction(txn);
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) showToast(context, 'Transaction updated');
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportCsv(BuildContext context, TransactionProvider provider) async {
+    if (provider.filteredTransactions.isEmpty && provider.buildCsv().trim().split('\n').length <= 1) {
+      showToast(context, 'Nothing to export in this view', isError: true);
+      return;
+    }
+    try {
+      final dir = await getTemporaryDirectory();
+      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final file = File('${dir.path}/moneycap_$stamp.csv');
+      await file.writeAsString(provider.buildCsv());
+      await Share.shareXFiles([XFile(file.path)], subject: 'MoneyCap transactions');
+    } catch (e) {
+      if (context.mounted) showToast(context, 'Export failed', isError: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<TransactionProvider>();
@@ -229,23 +463,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MoneyCap'),
+        title: _searching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: TextStyle(color: cs.onSurface, fontSize: 18),
+                cursorColor: cs.primary,
+                decoration: InputDecoration(
+                  hintText: 'Search merchant or amount…',
+                  hintStyle: TextStyle(color: cs.onSurfaceVariant),
+                  border: InputBorder.none,
+                ),
+                onChanged: provider.setSearchQuery,
+              )
+            : const Text('MoneyCap'),
         actions: [
-          Switch(
-            value: provider.isAutoSync,
-            onChanged: (val) {
-              provider.toggleAutoSync(val);
-              showToast(context, 'Auto Sync ${val ? "Enabled" : "Disabled"}');
+          IconButton(
+            icon: Icon(_searching ? Icons.close : Icons.search),
+            tooltip: _searching ? 'Close search' : 'Search',
+            onPressed: () {
+              setState(() {
+                _searching = !_searching;
+                if (!_searching) {
+                  _searchController.clear();
+                  provider.setSearchQuery('');
+                }
+              });
             },
           ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
+          if (!_searching)
+            Switch(
+              value: provider.isAutoSync,
+              onChanged: (val) {
+                provider.toggleAutoSync(val);
+                showToast(context, 'Auto Sync ${val ? "Enabled" : "Disabled"}');
+              },
+            ),
+          if (!_searching)
+            PopupMenuButton<String>(
+              onSelected: (value) {
               if (value == 'stats') {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const StatsScreen()));
               } else if (value == 'reconciliation') {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const ReconciliationScreen()));
               } else if (value == 'theme') {
                 _showThemePicker(context);
+              } else if (value == 'export') {
+                _exportCsv(context, provider);
               } else if (value == 'reset') {
                 showDialog(
                   context: context,
@@ -279,6 +543,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const PopupMenuItem(
                 value: 'theme',
                 child: Row(children: [Icon(Icons.brightness_6), SizedBox(width: 8), Text('Theme')]),
+              ),
+              const PopupMenuItem(
+                value: 'export',
+                child: Row(children: [Icon(Icons.download), SizedBox(width: 8), Text('Export CSV')]),
               ),
               const PopupMenuItem(
                 value: 'reset',
@@ -348,6 +616,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                   _buildSummaryCard(context, provider),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<TypeFilter>(
+                        segments: const [
+                          ButtonSegment(value: TypeFilter.all, label: Text('All')),
+                          ButtonSegment(value: TypeFilter.income, label: Text('Income')),
+                          ButtonSegment(value: TypeFilter.expense, label: Text('Expense')),
+                        ],
+                        selected: {provider.typeFilter},
+                        onSelectionChanged: (s) => provider.setTypeFilter(s.first),
+                        showSelectedIcon: false,
+                      ),
+                    ),
+                  ),
                   Expanded(
                     child: provider.filteredTransactions.isEmpty
                         ? const Center(child: Text('No transactions in this period'))
@@ -360,6 +644,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ? AppColors.expense(cs.brightness)
                                   : AppColors.income(cs.brightness);
                               return ListTile(
+                                onTap: () => _showTransactionActions(context, provider, txn),
                                 leading: CircleAvatar(
                                   backgroundColor: txnColor.withOpacity(0.15),
                                   child: Icon(
