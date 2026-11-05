@@ -1,59 +1,101 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'notification_service.dart';
 
-/// Handles FCM push reminders (the reliable delivery path on OEMs that block
-/// local AlarmManager notifications, e.g. vivo/Xiaomi/Oppo). A scheduled cloud
-/// job (GitHub Actions cron) broadcasts to the `balance_opening` /
-/// `balance_closing` topics on the 1st and last day of each month; Google Play
-/// Services delivers them even when the app is killed.
+/// Background/terminated FCM handler. Reminder pushes are notification
+/// messages the system displays itself, so there's nothing to do here.
+@pragma('vm:entry-point')
+Future<void> firebaseBackgroundHandler(RemoteMessage message) async {}
+
+/// FCM push reminders (reliable on OEMs that kill local alarms). A scheduled
+/// GitHub Action broadcasts a GENERIC reminder to the `balance_opening` /
+/// `balance_closing` topics. The app never sends anything to Firebase; the
+/// only data Google receives is the device's push token.
 ///
-/// Messages carry `data: {type: opening|closing, month: yyyy-MM}` so a tap can
-/// deep-link into reconciliation, reusing the existing payload flow handled in
-/// the dashboard via [NotificationService.onNotificationTap].
+/// Optional: if google-services.json wasn't present at build time, Firebase
+/// fails to initialize and reminders fall back to the in-app prompt. Users
+/// can also switch push reminders off (unsubscribes and deletes the token).
 class PushService {
   static final PushService instance = PushService._init();
-  final FirebaseMessaging _fm = FirebaseMessaging.instance;
-
   PushService._init();
 
-  Future<void> init() async {
-    // Request push permission (Android 13+ / iOS). Harmless if already granted.
-    await _fm.requestPermission();
+  static const _topics = ['balance_opening', 'balance_closing'];
+  static bool _available = false;
+  bool _listening = false;
 
-    // Subscribe to the topics the scheduled cloud job broadcasts to.
-    await _fm.subscribeToTopic('balance_opening');
-    await _fm.subscribeToTopic('balance_closing');
+  static bool get available => _available;
 
-    // Foreground: FCM notification messages are NOT shown automatically, so we
-    // display them through the local-notification channel (this also makes the
-    // tap go through the existing reconciliation deep-link flow).
+  /// Call once from main(). Never throws.
+  static Future<bool> initFirebase() async {
+    try {
+      await Firebase.initializeApp();
+      FirebaseMessaging.onBackgroundMessage(firebaseBackgroundHandler);
+      _available = true;
+    } catch (e) {
+      debugPrint('Firebase unavailable, push reminders disabled: $e');
+      _available = false;
+    }
+    return _available;
+  }
+
+  Future<void> init({required bool enabled}) async {
+    if (!_available) return;
+    final fm = FirebaseMessaging.instance;
+    if (!enabled) {
+      await setEnabled(false);
+      return;
+    }
+    await fm.requestPermission();
+    for (final t in _topics) {
+      await fm.subscribeToTopic(t);
+    }
+    if (_listening) return;
+    _listening = true;
+
+    // Foreground: show it through the local channel so the tap deep-links.
     FirebaseMessaging.onMessage.listen((message) {
+      final payload = _payloadFor(message);
+      if (payload == null) return;
       NotificationService.instance.showReminder(
         title: message.notification?.title ?? 'Balance Reminder',
         body: message.notification?.body ?? 'Tap to update your balance',
-        payload: _payloadFor(message),
+        payload: payload,
       );
     });
-
-    // App backgrounded, user tapped the system-shown notification.
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      NotificationService.instance.emitTap(_payloadFor(message));
+      final p = _payloadFor(message);
+      if (p != null) NotificationService.instance.emitTap(p);
     });
+    final initial = await fm.getInitialMessage();
+    final p = initial == null ? null : _payloadFor(initial);
+    if (p != null) NotificationService.instance.emitTap(p);
+  }
 
-    // App was terminated and launched by tapping the notification.
-    final initial = await _fm.getInitialMessage();
-    if (initial != null) {
-      NotificationService.instance.emitTap(_payloadFor(initial));
+  Future<void> setEnabled(bool on) async {
+    if (!_available) return;
+    try {
+      final fm = FirebaseMessaging.instance;
+      if (on) {
+        await init(enabled: true);
+      } else {
+        for (final t in _topics) {
+          await fm.unsubscribeFromTopic(t);
+        }
+        await fm.deleteToken();
+      }
+    } catch (e) {
+      debugPrint('PushService.setEnabled($on) failed: $e');
     }
   }
 
-  /// Converts an FCM message into the `type:yyyy-MM` payload the dashboard's
-  /// notification-tap handler expects. Always returns a valid value.
-  String _payloadFor(RemoteMessage message) {
+  /// `type:yyyy-MM`, or null if the push data is malformed (push data is
+  /// untrusted input and must never crash the app).
+  String? _payloadFor(RemoteMessage message) {
     final type = message.data['type'] == 'closing' ? 'closing' : 'opening';
     final now = DateTime.now();
-    final month = message.data['month'] ??
-        '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final month = message.data['month'] ?? '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    if (month is! String || !RegExp(r'^\d{4}-(0[1-9]|1[0-2])$').hasMatch(month)) return null;
     return '$type:$month';
   }
 }

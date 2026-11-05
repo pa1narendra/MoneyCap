@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: keep everything OUT of Google cloud backup. The database
+     holds bank SMS text, which must never leave the phone automatically.
+     Device-to-device transfer (a user-initiated cable/Wi-Fi move to a new
+     phone) is allowed so history follows the user to their new device. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+</data-extraction-rules>

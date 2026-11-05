@@ -82,24 +82,24 @@ class DashboardSkeleton extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Filter row placeholder
-          Padding(
-            padding: const EdgeInsets.all(16),
+          const Padding(
+            padding: EdgeInsets.all(16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: const [
+              children: [
                 SkeletonBox(width: 130, height: 34),
                 SkeletonBox(width: 60, height: 14),
               ],
             ),
           ),
           // Summary card placeholder
-          Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
+          const Card(
+            margin: EdgeInsets.symmetric(horizontal: 16),
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.all(20),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: const [
+                children: [
                   _SummaryColumnSkeleton(),
                   SizedBox(height: 40, width: 1),
                   _SummaryColumnSkeleton(),
@@ -147,9 +147,9 @@ class _SummaryColumnSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return const Column(
       mainAxisSize: MainAxisSize.min,
-      children: const [
+      children: [
         SkeletonBox(width: 60, height: 12),
         SizedBox(height: 10),
         SkeletonBox(width: 90, height: 20),

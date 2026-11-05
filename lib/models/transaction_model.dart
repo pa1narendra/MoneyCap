@@ -1,13 +1,24 @@
-
 class TransactionModel {
+  static const kindNormal = 'NORMAL';
+  static const kindTransfer = 'TRANSFER';
+
   int? id;
   double amount;
-  String type; // 'CREDIT' or 'DEBIT'
+  String type; // 'CREDIT' or 'DEBIT' (direction of money for the account)
   String merchant;
   DateTime timestamp;
   String body;
   String source; // 'SMS' or 'MANUAL'
   String? dedupKey; // stable signature so re-delivered SMS collapse to one row
+  /// NORMAL counts toward income/expense. TRANSFER (own-account moves, card
+  /// bill payments) is shown but excluded from totals so nothing is counted
+  /// twice.
+  String kind;
+  /// Masked account/card suffix from the SMS, e.g. `XX1234`. Null when the
+  /// message doesn't name one (or for manual entries without an account).
+  String? account;
+  /// User-chosen category override. Null means "use the merchant rules".
+  String? category;
 
   TransactionModel({
     this.id,
@@ -16,9 +27,16 @@ class TransactionModel {
     required this.merchant,
     required this.timestamp,
     required this.body,
-    this.source = 'SMS', // Default to SMS for backward compatibility if needed, but we will migrate DB
+    this.source = 'SMS',
     this.dedupKey,
+    this.kind = kindNormal,
+    this.account,
+    this.category,
   });
+
+  bool get isTransfer => kind == kindTransfer;
+  bool get isExpense => type == 'DEBIT' && !isTransfer;
+  bool get isIncome => type == 'CREDIT' && !isTransfer;
 
   Map<String, dynamic> toMap() {
     return {
@@ -30,19 +48,50 @@ class TransactionModel {
       'body': body,
       'source': source,
       'dedup_key': dedupKey,
+      'kind': kind,
+      'account': account,
+      'category': category,
     };
   }
 
   factory TransactionModel.fromMap(Map<String, dynamic> map) {
     return TransactionModel(
-      id: map['id'],
-      amount: map['amount'],
-      type: map['type'],
-      merchant: map['merchant'],
-      timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp']),
-      body: map['body'],
-      source: map['source'] ?? 'SMS', // Default for old records
-      dedupKey: map['dedup_key'],
+      id: map['id'] as int?,
+      amount: (map['amount'] as num).toDouble(),
+      type: map['type'] as String,
+      merchant: map['merchant'] as String,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int),
+      body: map['body'] as String,
+      source: (map['source'] as String?) ?? 'SMS',
+      dedupKey: map['dedup_key'] as String?,
+      kind: (map['kind'] as String?) ?? kindNormal,
+      account: map['account'] as String?,
+      category: map['category'] as String?,
+    );
+  }
+
+  TransactionModel copyWith({
+    double? amount,
+    String? type,
+    String? merchant,
+    DateTime? timestamp,
+    String? kind,
+    String? account,
+    String? category,
+    bool clearCategory = false,
+  }) {
+    return TransactionModel(
+      id: id,
+      amount: amount ?? this.amount,
+      type: type ?? this.type,
+      merchant: merchant ?? this.merchant,
+      timestamp: timestamp ?? this.timestamp,
+      body: body,
+      source: source,
+      dedupKey: dedupKey,
+      kind: kind ?? this.kind,
+      account: account ?? this.account,
+      category: clearCategory ? null : (category ?? this.category),
     );
   }
 }

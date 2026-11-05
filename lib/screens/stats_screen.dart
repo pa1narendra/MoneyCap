@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import '../providers/transaction_provider.dart';
 import '../models/transaction_model.dart';
 import '../theme/app_theme.dart';
+import '../services/category_service.dart';
+import '../services/insights_service.dart';
+import 'package:intl/intl.dart';
 
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
@@ -28,30 +31,54 @@ class _StatsScreenState extends State<StatsScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final provider = context.watch<TransactionProvider>();
-    final txns = provider.filteredTransactions.where((t) => t.type == 'DEBIT').toList();
+    // Expenses in the dashboard's current period. Transfers are excluded, and
+    // "Unknown" merchants aren't a merchant, so they're left out of rankings.
+    final txns = provider.periodTransactions.where((t) => t.isExpense).toList();
 
-    // Group expenses by merchant.
+    // Group by merchant case-insensitively ("AMAZON" == "Amazon"); show the
+    // first spelling seen.
     final Map<String, double> merchantExpenses = {};
     final Map<String, int> merchantCounts = {};
-    for (var txn in txns) {
-      merchantExpenses[txn.merchant] = (merchantExpenses[txn.merchant] ?? 0) + txn.amount;
-      merchantCounts[txn.merchant] = (merchantCounts[txn.merchant] ?? 0) + 1;
+    final Map<String, String> displayName = {};
+    for (final txn in txns) {
+      if (txn.merchant == 'Unknown') continue;
+      final key = Categories.merchantKey(txn.merchant);
+      displayName.putIfAbsent(key, () => txn.merchant);
+      merchantExpenses[key] = (merchantExpenses[key] ?? 0) + txn.amount;
+      merchantCounts[key] = (merchantCounts[key] ?? 0) + 1;
     }
 
-    final sortedExpenses = merchantExpenses.entries.toList()
+    final sortedExpenses = merchantExpenses.entries
+        .map((e) => MapEntry(displayName[e.key]!, e.value))
+        .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final repeatedPayments = merchantCounts.entries
         .where((e) => e.value > 1)
         .map((e) => _RepeatedPayment(
-              merchant: e.key,
+              merchant: displayName[e.key]!,
               count: e.value,
               totalAmount: merchantExpenses[e.key] ?? 0.0,
             ))
         .toList()
       ..sort((a, b) => b.count.compareTo(a.count));
 
+    // Spending by category for the same period.
+    final byCategory = <String, double>{};
+    for (final t in txns) {
+      final c = provider.categoryOf(t);
+      byCategory[c] = (byCategory[c] ?? 0) + t.amount;
+    }
+    final categoryRows = byCategory.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final categoryTotal = byCategory.values.fold(0.0, (s, v) => s + v);
+
+    // Recurring payments use ALL history (they need several months).
+    final recurring = Insights.detectRecurring(provider.transactions);
+    final recurringMonthly = recurring.fold(0.0, (s, r) => s + r.monthlyCost);
+
     final topExpenses = sortedExpenses.take(5).toList();
-    final totalExpense = provider.totalExpense;
+    // Pie percentages are of the ranked merchants' spend, so they're coherent
+    // even when the dashboard list is toggled to "Income".
+    final totalExpense = sortedExpenses.fold(0.0, (s, e) => s + e.value);
 
     Color colorFor(int i) => AppColors.chartPalette[i % AppColors.chartPalette.length];
 
@@ -62,7 +89,7 @@ class _StatsScreenState extends State<StatsScreen> {
     const monthAbbr = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     final monthTotals = months.map((m) {
       return provider.transactions
-          .where((t) => t.type == 'DEBIT' && t.timestamp.year == m.year && t.timestamp.month == m.month)
+          .where((t) => t.isExpense && t.timestamp.year == m.year && t.timestamp.month == m.month)
           .fold(0.0, (s, t) => s + t.amount);
     }).toList();
     final maxTotal = monthTotals.fold(0.0, (mx, v) => v > mx ? v : mx);
@@ -132,7 +159,57 @@ class _StatsScreenState extends State<StatsScreen> {
             const SizedBox(height: AppSpacing.lg),
             const Divider(),
             const SizedBox(height: AppSpacing.md),
-            const _SectionTitle('Top Spending'),
+            const _SectionTitle('By Category'),
+            const SizedBox(height: AppSpacing.md),
+            if (categoryRows.isEmpty) _emptyState(context, 'No expenses in this period'),
+            for (final e in categoryRows)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text(e.key)),
+                    Text('₹${e.value.toStringAsFixed(2)}',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ]),
+                  const SizedBox(height: 4),
+                  LinearProgressIndicator(
+                    value: categoryTotal == 0 ? 0 : e.value / categoryTotal,
+                    minHeight: 6,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ]),
+              ),
+            const SizedBox(height: AppSpacing.lg),
+            const Divider(),
+            const SizedBox(height: AppSpacing.md),
+            const _SectionTitle('Recurring & Subscriptions'),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              recurring.isEmpty
+                  ? 'Payments that repeat on a steady schedule show up here once there are 3 or more.'
+                  : 'About ₹${recurringMonthly.toStringAsFixed(0)} a month across ${recurring.length} recurring payment${recurring.length == 1 ? '' : 's'}.',
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            for (final r in recurring)
+              Card(
+                elevation: 0,
+                color: cs.surfaceContainerHighest,
+                margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                child: ListTile(
+                  leading: Icon(Icons.autorenew, color: cs.primary),
+                  title: Text(r.merchant, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text('${r.cadence.name[0].toUpperCase()}${r.cadence.name.substring(1)}'
+                      ' · next around ${DateFormat('d MMM').format(r.nextExpected)}'),
+                  trailing: Text('₹${r.typicalAmount.toStringAsFixed(0)}',
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                ),
+              ),
+            const SizedBox(height: AppSpacing.lg),
+            const Divider(),
+            const SizedBox(height: AppSpacing.md),
+            const _SectionTitle('Top Merchants'),
             const SizedBox(height: AppSpacing.lg),
             if (totalExpense > 0)
               SizedBox(
@@ -204,7 +281,7 @@ class _StatsScreenState extends State<StatsScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 child: ListTile(
                   leading: CircleAvatar(
-                    backgroundColor: cs.primary.withOpacity(0.15),
+                    backgroundColor: cs.primary.withValues(alpha: 0.15),
                     foregroundColor: cs.primary,
                     child: Text('${rp.count}', style: const TextStyle(fontWeight: FontWeight.w700)),
                   ),
@@ -232,9 +309,9 @@ class _StatsScreenState extends State<StatsScreen> {
     for (final t in all) {
       if (t.timestamp.year == m.year && t.timestamp.month == m.month) {
         cnt++;
-        if (t.type == 'DEBIT') {
+        if (t.isExpense) {
           exp += t.amount;
-        } else {
+        } else if (t.isIncome) {
           inc += t.amount;
         }
       }
@@ -299,7 +376,8 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Widget _monthDropdown(List<DateTime> options, DateTime value, ValueChanged<DateTime> onChanged) {
     return DropdownButtonFormField<DateTime>(
-      value: value,
+      key: ValueKey(value),
+      initialValue: value,
       isExpanded: true,
       decoration: const InputDecoration(
         isDense: true,

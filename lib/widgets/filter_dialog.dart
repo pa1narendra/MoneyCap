@@ -39,13 +39,13 @@ class FilterDialog extends StatelessWidget {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  const Icon(Icons.filter_list, size: 20),
-                  const SizedBox(width: 8),
-                  const Text(
+                  Icon(Icons.filter_list, size: 20),
+                  SizedBox(width: 8),
+                  Text(
                     'Filter by Date',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),

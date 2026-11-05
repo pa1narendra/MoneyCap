@@ -1,102 +1,131 @@
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'parser_service.dart';
 import 'db_service.dart';
 
+enum SyncStatus { ok, noPermission, error }
+
+class SyncResult {
+  final SyncStatus status;
+  final int inserted;
+  final int scanned;
+  const SyncResult(this.status, {this.inserted = 0, this.scanned = 0});
+}
+
+/// Imports bank SMS from the inbox.
+///
+/// Progress is tracked by a WATERMARK: the date of the newest SMS ever
+/// scanned (stored in prefs), not the newest saved row. Deleting a row can
+/// therefore never rewind the scan and re-import it, and non-transaction
+/// SMS aren't re-scanned on every sync.
+///
+/// Never prompts for permission (the onboarding screen does that, with a
+/// disclosure first), so it's safe to call from a background task.
 class SmsService {
+  static const _kWatermark = 'sms_watermark_ms';
+  static const _kPendingRescan = 'pending_rescan_v5';
+  static const _safetyLimit = 20000;
+  static const _processChunk = 1000;
+
   final SmsQuery _query = SmsQuery();
   final DatabaseHelper _db = DatabaseHelper.instance;
 
-  Future<void> syncSms() async {
-    var permission = await Permission.sms.status;
-    if (permission.isDenied) {
-      await Permission.sms.request();
+  static Future<SyncResult>? _running;
+
+  /// Concurrent callers (startup auto-sync + pull-to-refresh) share one run.
+  Future<SyncResult> syncSms({void Function(double progress)? onProgress}) {
+    return _running ??= _sync(onProgress).whenComplete(() => _running = null);
+  }
+
+  /// False (never throws) when the permission can't be checked, e.g. in a
+  /// background isolate without the plugin or on a non-Android platform.
+  static Future<bool> hasPermission() async {
+    try {
+      return await Permission.sms.isGranted;
+    } catch (_) {
+      return false;
     }
-    
-    if (await Permission.sms.isGranted) {
-      final sw = Stopwatch()..start();
-      final lastSync = await _db.getLatestTimestamp();
-      final bool firstRun = lastSync == null;
+  }
 
-      const int safetyLimit = 10000; // hard cap to avoid runaways on odd devices
+  /// Forget the watermark so the next sync re-reads the whole inbox (after a
+  /// reset). Deleted rows stay deleted (their keys are remembered).
+  static Future<void> clearWatermark() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kWatermark);
+  }
 
-      // READING is the dominant cost. Offset paging (querySms with a growing
-      // `start`) is ~O(n^2) because each call re-skips earlier rows. So on a
-      // first run we read the whole inbox in ONE pass; incremental runs read
-      // small pages and stop early at lastSync.
-      final int readPage = firstRun ? safetyLimit : 200;
-      // PROCESSING (parse on a background isolate + batched insert) is done in
-      // small chunks so a big single read still feels smooth — each chunk yields
-      // a frame, keeping the skeleton shimmer animating.
-      const int processChunk = 1000;
-
-      bool isFinished = false;
-      int start = 0;
-      int totalChecked = 0;
-      int totalInserted = 0;
-      int readMs = 0, parseMs = 0, insertMs = 0;
-
-      while (!isFinished && totalChecked < safetyLimit) {
-        final t = Stopwatch()..start();
-        final messages = await _query.querySms(
-          kinds: [SmsQueryKind.inbox],
-          sort: true, // newest first
-          count: readPage,
-          start: start,
-        );
-        readMs += t.elapsedMilliseconds;
-
-        if (messages.isEmpty) break;
-
-        // Collect qualifying raw records (cheap date checks on the main isolate).
-        final raws = <Map<String, dynamic>>[];
-        for (var msg in messages) {
-          if (msg.date == null) continue;
-
-          // Sorted newest-first: once we pass lastSync, everything else is older.
-          if (lastSync != null && msg.date!.isBefore(lastSync)) {
-            isFinished = true;
-            break;
-          }
-          // Skip messages already imported (at or before lastSync).
-          if (lastSync != null && !msg.date!.isAfter(lastSync)) continue;
-
-          raws.add({
-            'body': msg.body,
-            'address': msg.address,
-            'date': msg.date!.millisecondsSinceEpoch,
-          });
-        }
-
-        // Parse + insert in small chunks (background isolate per chunk), yielding
-        // a frame between each so the UI never freezes even on a huge first read.
-        for (int i = 0; i < raws.length; i += processChunk) {
-          final end =
-              (i + processChunk < raws.length) ? i + processChunk : raws.length;
-          final sub = raws.sublist(i, end);
-
-          t.reset();
-          final txnMaps = await compute(parseSmsBatch, sub);
-          parseMs += t.elapsedMilliseconds;
-
-          t.reset();
-          await _db.createAllRaw(txnMaps);
-          insertMs += t.elapsedMilliseconds;
-          totalInserted += txnMaps.length;
-
-          await Future.delayed(Duration.zero); // yield a frame
-        }
-
-        start += readPage;
-        totalChecked += messages.length;
+  Future<SyncResult> _sync(void Function(double)? onProgress) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // The background isolate may have advanced the watermark; don't trust
+      // this isolate's cached copy.
+      await prefs.reload();
+      await _db.database; // runs migrations; may request a rescan
+      if (DatabaseHelper.needsRescan) {
+        // Persist first, so the request survives even if SMS access is off now.
+        DatabaseHelper.needsRescan = false;
+        await prefs.setBool(_kPendingRescan, true);
+      }
+      if (!await hasPermission()) return const SyncResult(SyncStatus.noPermission);
+      if (prefs.getBool(_kPendingRescan) ?? false) {
+        // Rows from the old parser are unreliable: re-import from the inbox.
+        await _db.deleteSmsTransactions();
+        await prefs.remove(_kWatermark);
       }
 
-      sw.stop();
-      debugPrint('SMS sync: scanned $totalChecked, inserted $totalInserted in '
-          '${sw.elapsedMilliseconds}ms (read ${readMs}ms, parse ${parseMs}ms, '
-          'insert ${insertMs}ms)');
+      final wmMs = prefs.getInt(_kWatermark);
+      final watermark = wmMs == null ? null : DateTime.fromMillisecondsSinceEpoch(wmMs);
+      final sw = Stopwatch()..start();
+
+      // A first run reads the whole inbox in ONE query (offset paging is
+      // O(n^2)); incremental runs read small pages and stop at the watermark.
+      final readPage = watermark == null ? _safetyLimit : 200;
+      var start = 0, scanned = 0, inserted = 0;
+      DateTime? newest;
+      var done = false;
+      final newIds = <int>[];
+
+      while (!done && scanned < _safetyLimit) {
+        final messages = await _query.querySms(
+            kinds: [SmsQueryKind.inbox], sort: true, count: readPage, start: start);
+        if (messages.isEmpty) break;
+
+        final raws = <Map<String, dynamic>>[];
+        for (final msg in messages) {
+          final d = msg.date;
+          if (d == null) continue;
+          if (watermark != null && !d.isAfter(watermark)) {
+            done = true; // sorted newest first: the rest is older
+            break;
+          }
+          if (newest == null || d.isAfter(newest)) newest = d;
+          raws.add({'body': msg.body, 'address': msg.address, 'date': d.millisecondsSinceEpoch});
+        }
+
+        for (var i = 0; i < raws.length; i += _processChunk) {
+          final sub = raws.sublist(i, (i + _processChunk).clamp(0, raws.length));
+          final maps = await compute(parseSmsBatch, sub);
+          final ids = await _db.createAllRaw(maps);
+          newIds.addAll(ids);
+          inserted += ids.length;
+          onProgress?.call(((i + sub.length) / raws.length).clamp(0.0, 1.0));
+          await Future<void>.delayed(Duration.zero); // let a frame through
+        }
+        start += readPage;
+        scanned += messages.length;
+      }
+
+      await _db.pairTransfers(newIds);
+      if (newest != null) await prefs.setInt(_kWatermark, newest.millisecondsSinceEpoch);
+      await prefs.remove(_kPendingRescan);
+      onProgress?.call(1);
+      debugPrint('SMS sync: scanned $scanned, inserted $inserted in ${sw.elapsedMilliseconds}ms');
+      return SyncResult(SyncStatus.ok, inserted: inserted, scanned: scanned);
+    } catch (e, st) {
+      debugPrint('SMS sync failed: $e\n$st');
+      return const SyncResult(SyncStatus.error);
     }
   }
 }

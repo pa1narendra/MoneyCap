@@ -1,10 +1,16 @@
 import 'package:intl/intl.dart';
 import 'db_service.dart';
 
+/// Opening/closing balance prompts and reconciliation.
+///
+/// Reconciliation is per account (`account` = e.g. `A/c XX1234`), or `''` for
+/// all bank accounts combined. Transfers ARE included here: they really moved
+/// money in and out of the account (an own-account transfer nets to zero
+/// across the combined view). Card rows are excluded from the combined view
+/// because a card's dues are not part of a bank balance.
 class BalanceService {
   final DatabaseHelper _db = DatabaseHelper.instance;
 
-  // Check if we need to prompt for opening/closing balance
   Future<BalancePrompt?> checkBalancePrompt() async {
     final now = DateTime.now();
     final month = DateFormat('yyyy-MM').format(now);
@@ -12,140 +18,64 @@ class BalanceService {
     final lastDay = DateTime(now.year, now.month + 1, 0).day;
     final monthName = DateFormat('MMMM yyyy').format(now);
 
-    // Opening: prompt during the FIRST FEW DAYS of the month (not just day 1) if
-    // it hasn't been recorded yet. This is the reliable fallback — a push that
-    // never arrives (device offline / OEM force-stop) still gets caught the next
-    // time the app is opened in early month, without depending on FCM at all.
+    // Opening: during the first 5 days if not recorded (fallback for a push
+    // that never arrived).
     if (now.day <= 5 && (balance == null || balance['opening_balance'] == null)) {
       return BalancePrompt(type: PromptType.opening, month: month, monthName: monthName);
     }
-
-    // Closing: prompt during the last few days of the month if not recorded.
+    // Closing: during the last 3 days if not recorded.
     if (now.day >= lastDay - 2 && (balance == null || balance['closing_balance'] == null)) {
       return BalancePrompt(type: PromptType.closing, month: month, monthName: monthName);
     }
-
     return null;
   }
 
-  // Calculate expected balance from transactions
-  Future<double> calculateExpectedBalance(String month, double openingBalance) async {
-    final db = await _db.database;
-    
-    // Parse month to get start and end dates
-    final parts = month.split('-');
-    final year = int.parse(parts[0]);
-    final monthNum = int.parse(parts[1]);
-    final startDate = DateTime(year, monthNum, 1);
-    final endDate = DateTime(year, monthNum + 1, 0, 23, 59, 59);
-    
-    final startTimestamp = startDate.millisecondsSinceEpoch;
-    final endTimestamp = endDate.millisecondsSinceEpoch;
-    
-    // Get all transactions for the month
-    final transactions = await db.query(
-      'transactions',
-      where: 'timestamp >= ? AND timestamp <= ?',
-      whereArgs: [startTimestamp, endTimestamp],
-    );
-    
-    double totalCredits = 0;
-    double totalDebits = 0;
-    
-    for (var txn in transactions) {
-      final amount = txn['amount'] as double;
-      if (txn['type'] == 'CREDIT') {
-        totalCredits += amount;
-      } else {
-        totalDebits += amount;
-      }
-    }
-    
-    return openingBalance + totalCredits - totalDebits;
+  Future<MonthSummary> getMonthSummary(String month, {String account = ''}) async {
+    final rows = await _db.monthRows(month, account: account);
+    return MonthSummary.fromRows(month, rows);
   }
 
-  // Get discrepancy between expected and actual closing
-  Future<BalanceDiscrepancy?> getDiscrepancy(String month) async {
-    final balance = await _db.getMonthlyBalance(month);
-    
-    if (balance == null || 
-        balance['opening_balance'] == null || 
-        balance['closing_balance'] == null) {
-      return null;
-    }
-    
-    final openingBalance = balance['opening_balance'] as double;
-    final closingBalance = balance['closing_balance'] as double;
-    final expected = await calculateExpectedBalance(month, openingBalance);
-    
+  Future<BalanceDiscrepancy?> getDiscrepancy(String month, {String account = ''}) async {
+    final balance = await _db.getMonthlyBalance(month, account: account);
+    final opening = (balance?['opening_balance'] as num?)?.toDouble();
+    final closing = (balance?['closing_balance'] as num?)?.toDouble();
+    if (opening == null || closing == null) return null;
+    final summary = await getMonthSummary(month, account: account);
+    final expected = opening + summary.totalCredits - summary.totalDebits;
     return BalanceDiscrepancy(
       month: month,
-      openingBalance: openingBalance,
-      closingBalance: closingBalance,
+      openingBalance: opening,
+      closingBalance: closing,
       expectedClosing: expected,
-      discrepancy: closingBalance - expected,
-      isReconciled: (balance['is_reconciled'] as int) == 1,
-    );
-  }
-
-  // Get transaction summary for a month
-  Future<MonthSummary> getMonthSummary(String month) async {
-    final db = await _db.database;
-    
-    final parts = month.split('-');
-    final year = int.parse(parts[0]);
-    final monthNum = int.parse(parts[1]);
-    final startDate = DateTime(year, monthNum, 1);
-    final endDate = DateTime(year, monthNum + 1, 0, 23, 59, 59);
-    
-    final startTimestamp = startDate.millisecondsSinceEpoch;
-    final endTimestamp = endDate.millisecondsSinceEpoch;
-    
-    final transactions = await db.query(
-      'transactions',
-      where: 'timestamp >= ? AND timestamp <= ?',
-      whereArgs: [startTimestamp, endTimestamp],
-    );
-    
-    double totalCredits = 0;
-    double totalDebits = 0;
-    int creditCount = 0;
-    int debitCount = 0;
-    
-    for (var txn in transactions) {
-      final amount = txn['amount'] as double;
-      if (txn['type'] == 'CREDIT') {
-        totalCredits += amount;
-        creditCount++;
-      } else {
-        totalDebits += amount;
-        debitCount++;
-      }
-    }
-    
-    return MonthSummary(
-      month: month,
-      totalCredits: totalCredits,
-      totalDebits: totalDebits,
-      creditCount: creditCount,
-      debitCount: debitCount,
+      discrepancy: closing - expected,
+      isReconciled: (balance?['is_reconciled'] as int? ?? 0) == 1,
     );
   }
 }
 
-// Data classes
 enum PromptType { opening, closing }
 
 class BalancePrompt {
   final PromptType type;
   final String month;
   final String monthName;
+  BalancePrompt({required this.type, required this.month, required this.monthName});
 
-  BalancePrompt({
-    required this.type,
-    required this.month,
-    required this.monthName,
-  });
+  /// Parses a `type:yyyy-MM` notification payload. Returns null for anything
+  /// malformed (payloads come from push data, which is untrusted input).
+  static BalancePrompt? fromPayload(String payload) {
+    final m = RegExp(r'^(opening|closing):(\d{4})-(\d{2})$').firstMatch(payload);
+    if (m == null) return null;
+    final year = int.parse(m.group(2)!);
+    final mon = int.parse(m.group(3)!);
+    if (mon < 1 || mon > 12) return null;
+    final date = DateTime(year, mon);
+    return BalancePrompt(
+      type: m.group(1) == 'opening' ? PromptType.opening : PromptType.closing,
+      month: '${m.group(2)}-${m.group(3)}',
+      monthName: DateFormat('MMMM yyyy').format(date),
+    );
+  }
 }
 
 class BalanceDiscrepancy {
@@ -155,7 +85,6 @@ class BalanceDiscrepancy {
   final double expectedClosing;
   final double discrepancy;
   final bool isReconciled;
-
   BalanceDiscrepancy({
     required this.month,
     required this.openingBalance,
@@ -172,7 +101,6 @@ class MonthSummary {
   final double totalDebits;
   final int creditCount;
   final int debitCount;
-
   MonthSummary({
     required this.month,
     required this.totalCredits,
@@ -180,4 +108,21 @@ class MonthSummary {
     required this.creditCount,
     required this.debitCount,
   });
+
+  factory MonthSummary.fromRows(String month, List<Map<String, Object?>> rows) {
+    double credits = 0, debits = 0;
+    int cc = 0, dc = 0;
+    for (final r in rows) {
+      final amount = (r['amount'] as num).toDouble();
+      if (r['type'] == 'CREDIT') {
+        credits += amount;
+        cc++;
+      } else {
+        debits += amount;
+        dc++;
+      }
+    }
+    return MonthSummary(
+        month: month, totalCredits: credits, totalDebits: debits, creditCount: cc, debitCount: dc);
+  }
 }

@@ -27,11 +27,17 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.41.6'
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
 
       - name: Restore signing keystore
         env:
@@ -40,6 +46,11 @@ jobs:
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          # Local builds fall back to debug signing; a published release must not.
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::Release signing secrets are missing; refusing to publish a debug-signed APK."
+            exit 1
+          fi
           echo "$KS_B64" | base64 -d > android/app/moneycap-release.jks
           cat > android/key.properties <<EOF
           storePassword=$KS_PASS

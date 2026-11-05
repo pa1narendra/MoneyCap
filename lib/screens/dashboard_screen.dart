@@ -1,23 +1,31 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
-import '../providers/transaction_provider.dart';
-import '../providers/settings_provider.dart';
 import '../models/transaction_model.dart';
-import '../widgets/filter_dialog.dart';
-import '../widgets/balance_prompt_dialog.dart';
-import '../widgets/skeleton_loader.dart';
-import '../widgets/app_toast.dart';
-import '../theme/app_theme.dart';
+import '../providers/settings_provider.dart';
+import '../providers/transaction_provider.dart';
+import '../services/backup_service.dart';
 import '../services/balance_service.dart';
 import '../services/notification_service.dart';
 import '../services/push_service.dart';
-import 'stats_screen.dart';
+import '../services/sms_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_toast.dart';
+import '../widgets/balance_prompt_dialog.dart';
+import '../widgets/filter_dialog.dart';
+import '../widgets/skeleton_loader.dart';
+import '../widgets/transaction_form.dart';
+import '../widgets/transaction_sheet.dart';
+import 'budgets_screen.dart';
 import 'reconciliation_screen.dart';
+import 'settings_screen.dart';
+import 'stats_screen.dart';
+
+final _money = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+String formatMoney(double v) => _money.format(v);
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -26,419 +34,145 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   StreamSubscription<String>? _notificationSub;
   bool _isBalanceDialogShown = false;
-  bool _namePromptShown = false;
   bool _searching = false;
   final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<TransactionProvider>().loadTransactions();
-      _checkBalancePrompt();
-      _initializeNotifications();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await context.read<TransactionProvider>().start();
+      if (!mounted) return;
+      await _checkBalancePrompt();
+      await _initializeNotifications();
     });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _notificationSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // "Automatic" includes coming back to the app, not just a cold start.
+    if (state == AppLifecycleState.resumed) {
+      context.read<TransactionProvider>().onResume();
+    }
+  }
+
   Future<void> _checkBalancePrompt() async {
-    final balanceService = BalanceService();
-    final prompt = await balanceService.checkBalancePrompt();
-
-    if (prompt != null && mounted && !_isBalanceDialogShown) {
-      _isBalanceDialogShown = true;
-      final saved = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => BalancePromptDialog(prompt: prompt),
-      );
-      _isBalanceDialogShown = false;
-
-      if (saved == true && prompt.type == PromptType.closing && mounted) {
-        await _handleClosingMismatch(prompt.month);
-      }
+    final prompt = await BalanceService().checkBalancePrompt();
+    if (prompt == null || !mounted || _isBalanceDialogShown) return;
+    _isBalanceDialogShown = true;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => BalancePromptDialog(prompt: prompt),
+    );
+    _isBalanceDialogShown = false;
+    if (saved == true && prompt.type == PromptType.closing && mounted) {
+      await _handleClosingMismatch(prompt.month);
     }
   }
 
   Future<void> _initializeNotifications() async {
     try {
       await NotificationService.instance.initialize();
-
-      // Listen for taps (both local foreground notifications and FCM taps are
-      // funnelled into this stream) BEFORE init so nothing is missed.
-      _notificationSub = NotificationService.instance.onNotificationTap.listen(
-        _handleNotificationPayload,
-      );
-
-      // App launched by tapping a locally shown notification.
-      final initialPayload = await NotificationService.instance.getInitialPayload();
-      if (initialPayload != null) {
-        _handleNotificationPayload(initialPayload);
-      }
-
-      // Reminders are delivered via FCM push (reliable even on OEMs that block
-      // local AlarmManager notifications). Subscribe + wire up tap handling.
-      await PushService.instance.init();
+      _notificationSub = NotificationService.instance.onNotificationTap.listen(_handlePayload);
+      final initial = await NotificationService.instance.getInitialPayload();
+      if (initial != null) _handlePayload(initial);
+      if (!mounted) return;
+      await PushService.instance.init(enabled: context.read<SettingsProvider>().pushReminders);
     } catch (e) {
       debugPrint('Error initializing notifications: $e');
     }
   }
 
-  void _handleNotificationPayload(String payload) {
-    final parts = payload.split(':');
-    if (parts.length != 2) return;
+  void _handlePayload(String payload) {
+    final prompt = BalancePrompt.fromPayload(payload);
+    if (prompt == null || !mounted || _isBalanceDialogShown) return;
+    _isBalanceDialogShown = true;
+    showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => BalancePromptDialog(prompt: prompt),
+    ).then((saved) {
+      _isBalanceDialogShown = false;
+      if (saved == true && prompt.type == PromptType.closing && mounted) {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => ReconciliationScreen(initialMonth: prompt.month)));
+      }
+    });
+  }
 
-    final type = parts[0] == 'opening' ? PromptType.opening : PromptType.closing;
-    final month = parts[1];
-    final monthDate = DateTime.parse('$month-01');
-    final monthName = DateFormat('MMMM yyyy').format(monthDate);
+  /// After a closing balance is entered, offer to add the missing
+  /// transaction right here if the month doesn't reconcile.
+  Future<void> _handleClosingMismatch(String month) async {
+    final disc = await BalanceService().getDiscrepancy(month);
+    if (disc == null || disc.discrepancy.abs() < 0.01 || !mounted) return;
+    final provider = context.read<TransactionProvider>();
+    final diff = disc.discrepancy;
+    final isMissingCredit = diff > 0;
+    final parts = month.split('-');
+    final y = int.parse(parts[0]), m = int.parse(parts[1]);
+    final draft = await showTransactionForm(
+      context,
+      title: "Balance doesn't match",
+      submitLabel: 'Add',
+      message: 'Your records are off by ${formatMoney(diff.abs())}. This looks like a missing '
+          '${isMissingCredit ? "income" : "expense"}. Add it to reconcile.',
+      amount: diff.abs(),
+      type: isMissingCredit ? 'CREDIT' : 'DEBIT',
+      date: DateTime(y, m + 1, 0),
+      firstDate: DateTime(y, m, 1),
+      lastDate: DateTime(y, m + 1, 0),
+    );
+    if (draft == null) return;
+    await provider.addTransaction(draft.amount, draft.type, draft.merchant,
+        date: draft.date, category: draft.category, transfer: draft.transfer);
+    if (mounted) showToast(context, 'Missing transaction added');
+  }
 
-    final prompt = BalancePrompt(type: type, month: month, monthName: monthName);
+  Future<void> _addManual(TransactionProvider provider) async {
+    final draft = await showTransactionForm(context, title: 'Add transaction', submitLabel: 'Add');
+    if (draft == null) return;
+    await provider.addTransaction(draft.amount, draft.type, draft.merchant,
+        date: draft.date, category: draft.category, transfer: draft.transfer);
+    if (mounted) showToast(context, 'Transaction added');
+  }
 
-    if (mounted && !_isBalanceDialogShown) {
-      _isBalanceDialogShown = true;
-      showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => BalancePromptDialog(prompt: prompt),
-      ).then((saved) {
-        _isBalanceDialogShown = false;
-        if (saved == true && type == PromptType.closing && mounted) {
-          _navigateToReconciliation(month);
-        }
-      });
+  Future<void> _sync(TransactionProvider provider) async {
+    final r = await provider.syncSms();
+    if (!mounted) return;
+    switch (r.status) {
+      case SyncStatus.ok:
+        showToast(context, r.inserted == 0 ? 'Up to date' : 'Added ${r.inserted} new');
+      case SyncStatus.noPermission:
+        showToast(context, 'Allow SMS access to sync', isError: true);
+      case SyncStatus.error:
+        showToast(context, 'Sync failed, try again', isError: true);
     }
   }
 
-  void _navigateToReconciliation(String month) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => ReconciliationScreen(initialMonth: month)),
-    );
-  }
-
-  /// After a closing balance is entered, if it doesn't reconcile with the
-  /// recorded opening balance + transactions, offer to add the missing
-  /// transaction RIGHT HERE (prefilled with the shortfall + inferred type) —
-  /// no hop to the reconciliation screen. Only shows when there's a mismatch.
-  Future<void> _handleClosingMismatch(String month) async {
-    final disc = await BalanceService().getDiscrepancy(month);
-    // Needs both balances, and only prompts when it doesn't already reconcile.
-    if (disc == null || disc.discrepancy.abs() < 0.01) return;
-    if (!mounted) return;
-
-    final provider = context.read<TransactionProvider>();
-    final diff = disc.discrepancy;
-    final isMissingCredit = diff > 0; // actual > expected → missing income
-    final amountController = TextEditingController(text: diff.abs().toStringAsFixed(2));
-    final merchantController = TextEditingController();
-    String type = isMissingCredit ? 'CREDIT' : 'DEBIT';
-
-    final parts = month.split('-');
-    final year = int.parse(parts[0]);
-    final monthNum = int.parse(parts[1]);
-    DateTime selectedDate = DateTime(year, monthNum + 1, 0); // last day of month
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text("Balance doesn't match"),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Your records are off by ₹${diff.abs().toStringAsFixed(2)}. '
-                  'This looks like a missing ${isMissingCredit ? "income" : "expense"} — add it to reconcile.',
-                ),
-                const SizedBox(height: AppSpacing.md),
-                InkWell(
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: selectedDate,
-                      firstDate: DateTime(year, monthNum, 1),
-                      lastDate: DateTime(year, monthNum + 1, 0),
-                    );
-                    if (picked != null) setState(() => selectedDate = picked);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.calendar_today, size: 18),
-                        const SizedBox(width: AppSpacing.sm),
-                        Text(DateFormat('MMM d, yyyy').format(selectedDate)),
-                        const Spacer(),
-                        const Icon(Icons.edit, size: 16),
-                      ],
-                    ),
-                  ),
-                ),
-                TextField(
-                  controller: amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ '),
-                ),
-                TextField(
-                  controller: merchantController,
-                  decoration: const InputDecoration(labelText: 'Merchant / Description'),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Row(
-                  children: [
-                    const Text('Type: '),
-                    DropdownButton<String>(
-                      value: type,
-                      items: const [
-                        DropdownMenuItem(value: 'DEBIT', child: Text('Expense')),
-                        DropdownMenuItem(value: 'CREDIT', child: Text('Income')),
-                      ],
-                      onChanged: (v) => setState(() => type = v!),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Not now')),
-            FilledButton(
-              onPressed: () async {
-                final amount = double.tryParse(amountController.text);
-                if (amount == null || amount <= 0 || merchantController.text.trim().isEmpty) return;
-                await provider.addTransaction(amount, type, merchantController.text.trim(), date: selectedDate);
-                if (ctx.mounted) Navigator.pop(ctx);
-                if (context.mounted) showToast(context, 'Missing transaction added');
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showThemePicker(BuildContext context) {
-    final settings = context.read<SettingsProvider>();
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(AppSpacing.md),
-              child: Row(
-                children: [
-                  Icon(Icons.brightness_6),
-                  SizedBox(width: AppSpacing.sm),
-                  Text('Theme', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                ],
-              ),
-            ),
-            for (final entry in const {
-              ThemeMode.system: ('System default', Icons.brightness_auto),
-              ThemeMode.light: ('Light', Icons.light_mode),
-              ThemeMode.dark: ('Dark', Icons.dark_mode),
-            }.entries)
-              RadioListTile<ThemeMode>(
-                value: entry.key,
-                groupValue: settings.themeMode,
-                onChanged: (m) {
-                  settings.setThemeMode(m!);
-                  Navigator.pop(ctx);
-                },
-                title: Text(entry.value.$1),
-                secondary: Icon(entry.value.$2),
-              ),
-            const SizedBox(height: AppSpacing.sm),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showNameDialog() {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Welcome to MoneyCap 👋'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("What should we call you?"),
-            const SizedBox(height: AppSpacing.md),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => _saveName(ctx, controller.text),
-              decoration: const InputDecoration(
-                labelText: 'Your name',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              context.read<SettingsProvider>().setUserName('');
-              Navigator.pop(ctx);
-            },
-            child: const Text('Skip'),
-          ),
-          FilledButton(
-            onPressed: () => _saveName(ctx, controller.text),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _saveName(BuildContext ctx, String name) {
-    if (name.trim().isEmpty) return;
-    context.read<SettingsProvider>().setUserName(name);
-    Navigator.pop(ctx);
-  }
-
-  void _showTransactionActions(BuildContext context, TransactionProvider provider, TransactionModel txn) {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showEditTransactionDialog(context, provider, txn);
-              },
-            ),
-            ListTile(
-              leading: Icon(Icons.delete_outline, color: cs.error),
-              title: Text('Delete', style: TextStyle(color: cs.error)),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (dctx) => AlertDialog(
-                    title: const Text('Delete transaction?'),
-                    content: Text('${txn.merchant} · ₹${txn.amount.toStringAsFixed(2)}'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
-                      FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: cs.error),
-                        onPressed: () => Navigator.pop(dctx, true),
-                        child: const Text('Delete'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirm == true && txn.id != null) {
-                  await provider.deleteTransaction(txn.id!);
-                  if (context.mounted) showToast(context, 'Transaction deleted');
-                }
-              },
-            ),
-            const SizedBox(height: AppSpacing.sm),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showEditTransactionDialog(BuildContext context, TransactionProvider provider, TransactionModel txn) {
-    final amountController = TextEditingController(text: txn.amount.toStringAsFixed(2));
-    final merchantController = TextEditingController(text: txn.merchant);
-    String type = txn.type;
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Edit Transaction'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: amountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ '),
-              ),
-              TextField(
-                controller: merchantController,
-                decoration: const InputDecoration(labelText: 'Merchant / Description'),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Row(
-                children: [
-                  const Text('Type: '),
-                  DropdownButton<String>(
-                    value: type,
-                    items: const [
-                      DropdownMenuItem(value: 'DEBIT', child: Text('Expense')),
-                      DropdownMenuItem(value: 'CREDIT', child: Text('Income')),
-                    ],
-                    onChanged: (val) => setState(() => type = val!),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () async {
-                final amount = double.tryParse(amountController.text);
-                if (amount == null || amount <= 0 || merchantController.text.trim().isEmpty) return;
-                txn.amount = amount;
-                txn.merchant = merchantController.text.trim();
-                txn.type = type;
-                await provider.updateTransaction(txn);
-                if (ctx.mounted) Navigator.pop(ctx);
-                if (context.mounted) showToast(context, 'Transaction updated');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _exportCsv(BuildContext context, TransactionProvider provider) async {
-    if (provider.filteredTransactions.isEmpty && provider.buildCsv().trim().split('\n').length <= 1) {
+  Future<void> _exportCsv(TransactionProvider provider) async {
+    if (provider.filteredTransactions.isEmpty) {
       showToast(context, 'Nothing to export in this view', isError: true);
       return;
     }
     try {
-      final dir = await getTemporaryDirectory();
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
-      final file = File('${dir.path}/moneycap_$stamp.csv');
-      await file.writeAsString(provider.buildCsv());
+      final file = await BackupService.writeExportFile('moneycap_$stamp.csv', provider.buildCsv());
       await Share.shareXFiles([XFile(file.path)], subject: 'MoneyCap transactions');
     } catch (e) {
-      if (context.mounted) showToast(context, 'Export failed', isError: true);
+      if (mounted) showToast(context, 'Export failed', isError: true);
     }
   }
 
@@ -447,19 +181,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final provider = context.watch<TransactionProvider>();
     final settings = context.watch<SettingsProvider>();
     final cs = Theme.of(context).colorScheme;
+    final items = provider.filteredTransactions; // memoized; computed once per change
 
-    // First-launch: ask the user's name once (after the frame is built).
-    if (settings.needsName && !_namePromptShown) {
-      _namePromptShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _showNameDialog());
+    final range = provider.currentDateRange;
+    var rangeLabel = provider.activeFilter.label;
+    if (provider.activeFilter == TimeFilter.custom && range != null) {
+      rangeLabel = "${DateFormat('MMM d').format(range.start)} - ${DateFormat('MMM d').format(range.end)}";
     }
 
-    final currentRange = provider.currentDateRange;
-    String rangeLabel = provider.activeFilter.label;
-
-    if (provider.activeFilter == TimeFilter.custom && currentRange != null) {
-      rangeLabel = "${DateFormat('MMM d').format(currentRange.start)} - ${DateFormat('MMM d').format(currentRange.end)}";
-    }
+    final now = DateTime.now();
+    final budgetAlerts = provider.budgetStatusFor(DateTime(now.year, now.month))
+        .where((b) => b.fraction >= 0.9)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -468,358 +201,342 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 controller: _searchController,
                 autofocus: true,
                 style: TextStyle(color: cs.onSurface, fontSize: 18),
-                cursorColor: cs.primary,
                 decoration: InputDecoration(
-                  hintText: 'Search merchant or amount…',
+                  hintText: 'Search merchant, amount, category…',
                   hintStyle: TextStyle(color: cs.onSurfaceVariant),
                   border: InputBorder.none,
                 ),
                 onChanged: provider.setSearchQuery,
               )
             : const Text('MoneyCap'),
+        bottom: provider.isSyncing
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(3),
+                child: LinearProgressIndicator(value: provider.syncProgress, minHeight: 3),
+              )
+            : null,
         actions: [
           IconButton(
             icon: Icon(_searching ? Icons.close : Icons.search),
             tooltip: _searching ? 'Close search' : 'Search',
-            onPressed: () {
-              setState(() {
-                _searching = !_searching;
-                if (!_searching) {
-                  _searchController.clear();
-                  provider.setSearchQuery('');
-                }
-              });
-            },
+            onPressed: () => setState(() {
+              _searching = !_searching;
+              if (!_searching) {
+                _searchController.clear();
+                provider.setSearchQuery('');
+              }
+            }),
           ),
-          if (!_searching)
-            Switch(
-              value: provider.isAutoSync,
-              onChanged: (val) {
-                provider.toggleAutoSync(val);
-                showToast(context, 'Auto Sync ${val ? "Enabled" : "Disabled"}');
-              },
-            ),
           if (!_searching)
             PopupMenuButton<String>(
               onSelected: (value) {
-              if (value == 'stats') {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const StatsScreen()));
-              } else if (value == 'reconciliation') {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const ReconciliationScreen()));
-              } else if (value == 'theme') {
-                _showThemePicker(context);
-              } else if (value == 'export') {
-                _exportCsv(context, provider);
-              } else if (value == 'reset') {
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Reset Data?'),
-                    content: const Text('This will delete all transactions. You can re-sync from SMS.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                      TextButton(
-                        onPressed: () {
-                          provider.clearAll();
-                          Navigator.pop(ctx);
-                          showToast(context, 'Data Reset Complete');
-                        },
-                        child: Text('Reset', style: TextStyle(color: cs.error)),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'stats',
-                child: Row(children: [Icon(Icons.bar_chart), SizedBox(width: 8), Text('Statistics')]),
-              ),
-              const PopupMenuItem(
-                value: 'reconciliation',
-                child: Row(children: [Icon(Icons.account_balance), SizedBox(width: 8), Text('Reconciliation')]),
-              ),
-              const PopupMenuItem(
-                value: 'theme',
-                child: Row(children: [Icon(Icons.brightness_6), SizedBox(width: 8), Text('Theme')]),
-              ),
-              const PopupMenuItem(
-                value: 'export',
-                child: Row(children: [Icon(Icons.download), SizedBox(width: 8), Text('Export CSV')]),
-              ),
-              const PopupMenuItem(
-                value: 'reset',
-                child: Row(children: [Icon(Icons.delete_forever, color: Colors.red), SizedBox(width: 8), Text('Reset Data')]),
-              ),
-            ],
-          ),
+                Widget? page;
+                switch (value) {
+                  case 'stats':
+                    page = const StatsScreen();
+                  case 'budgets':
+                    page = const BudgetsScreen();
+                  case 'reconciliation':
+                    page = const ReconciliationScreen();
+                  case 'settings':
+                    page = const SettingsScreen();
+                  case 'export':
+                    _exportCsv(provider);
+                }
+                if (page != null) {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => page!));
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'stats', child: _MenuRow(Icons.bar_chart, 'Statistics')),
+                PopupMenuItem(value: 'budgets', child: _MenuRow(Icons.savings_outlined, 'Budgets')),
+                PopupMenuItem(value: 'reconciliation', child: _MenuRow(Icons.account_balance, 'Reconciliation')),
+                PopupMenuItem(value: 'export', child: _MenuRow(Icons.download, 'Export CSV')),
+                PopupMenuItem(value: 'settings', child: _MenuRow(Icons.settings_outlined, 'Settings')),
+              ],
+            ),
         ],
       ),
       body: provider.isLoading
           ? const DashboardSkeleton()
           : RefreshIndicator(
-              onRefresh: provider.syncSms,
-              child: Column(
-                children: [
-                  // Personalized greeting — full width so long names aren't clipped.
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, 0),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        settings.greeting(),
-                        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-                      ),
+              onRefresh: () => _sync(provider),
+              child: CustomScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, 0),
+                      child: Text(settings.greeting(),
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Flexible(
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(12),
-                            onTap: () => _showFilterDialog(context, provider),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: cs.outlineVariant),
-                                borderRadius: BorderRadius.circular(12),
-                                color: cs.surfaceContainerHighest,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.calendar_today, size: 16, color: cs.onSurfaceVariant),
-                                  const SizedBox(width: AppSpacing.sm),
-                                  Flexible(
-                                    child: Text(
-                                      rangeLabel,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                  ),
-                                  Icon(Icons.arrow_drop_down, color: cs.onSurfaceVariant),
-                                ],
-                              ),
+                  if (provider.lastSyncStatus == SyncStatus.noPermission)
+                    SliverToBoxAdapter(child: _permissionBanner(context)),
+                  SliverToBoxAdapter(child: _filterRow(context, provider, rangeLabel, items.length)),
+                  if (provider.accounts.length > 1)
+                    SliverToBoxAdapter(child: _accountChips(provider)),
+                  SliverToBoxAdapter(child: _summaryCard(context, provider)),
+                  for (final b in budgetAlerts)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+                        child: Material(
+                          color: b.over ? cs.errorContainer : cs.tertiaryContainer,
+                          borderRadius: BorderRadius.circular(12),
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.savings_outlined,
+                                color: b.over ? cs.onErrorContainer : cs.onTertiaryContainer),
+                            title: Text(
+                              b.over
+                                  ? '${b.category}: over budget by ${formatMoney(b.spent - b.limit)}'
+                                  : '${b.category}: ${(b.fraction * 100).round()}% of budget used',
+                              style: TextStyle(
+                                  color: b.over ? cs.onErrorContainer : cs.onTertiaryContainer),
                             ),
+                            onTap: () => Navigator.push(
+                                context, MaterialPageRoute(builder: (_) => const BudgetsScreen())),
                           ),
                         ),
-                        const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          '${provider.filteredTransactions.length} items',
-                          style: TextStyle(color: cs.onSurfaceVariant),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                  _buildSummaryCard(context, provider),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: SegmentedButton<TypeFilter>(
-                        segments: const [
-                          ButtonSegment(value: TypeFilter.all, label: Text('All')),
-                          ButtonSegment(value: TypeFilter.income, label: Text('Income')),
-                          ButtonSegment(value: TypeFilter.expense, label: Text('Expense')),
-                        ],
-                        selected: {provider.typeFilter},
-                        onSelectionChanged: (s) => provider.setTypeFilter(s.first),
-                        showSelectedIcon: false,
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: SegmentedButton<TypeFilter>(
+                          segments: const [
+                            ButtonSegment(value: TypeFilter.all, label: Text('All')),
+                            ButtonSegment(value: TypeFilter.income, label: Text('Income')),
+                            ButtonSegment(value: TypeFilter.expense, label: Text('Expense')),
+                          ],
+                          selected: {provider.typeFilter},
+                          onSelectionChanged: (s) => provider.setTypeFilter(s.first),
+                          showSelectedIcon: false,
+                        ),
                       ),
                     ),
                   ),
-                  Expanded(
-                    child: provider.filteredTransactions.isEmpty
-                        ? const Center(child: Text('No transactions in this period'))
-                        : ListView.builder(
-                            itemCount: provider.filteredTransactions.length,
-                            itemBuilder: (context, index) {
-                              final txn = provider.filteredTransactions[index];
-                              final isDebit = txn.type == 'DEBIT';
-                              final txnColor = isDebit
-                                  ? AppColors.expense(cs.brightness)
-                                  : AppColors.income(cs.brightness);
-                              return ListTile(
-                                onTap: () => _showTransactionActions(context, provider, txn),
-                                leading: CircleAvatar(
-                                  backgroundColor: txnColor.withOpacity(0.15),
-                                  child: Icon(
-                                    isDebit ? Icons.arrow_upward : Icons.arrow_downward,
-                                    color: txnColor,
-                                  ),
-                                ),
-                                title: Text(txn.merchant, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                subtitle: Row(
-                                  children: [
-                                    Icon(txn.source == 'SMS' ? Icons.message : Icons.person, size: 14, color: cs.onSurfaceVariant),
-                                    const SizedBox(width: AppSpacing.xs),
-                                    Text(DateFormat('yyyy-MM-dd HH:mm').format(txn.timestamp)),
-                                  ],
-                                ),
-                                trailing: Text(
-                                  '${isDebit ? '-' : '+'} ₹${txn.amount.toStringAsFixed(2)}',
-                                  style: TextStyle(
-                                    color: txnColor,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                  ),
+                  if (items.isEmpty)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(child: Text('No transactions in this period')),
+                    )
+                  else
+                    SliverList.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, i) => _TransactionTile(
+                        txn: items[i],
+                        category: provider.categoryOf(items[i]),
+                      ),
+                    ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 88)),
                 ],
               ),
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddOptions(context, provider),
+        tooltip: 'Add or sync',
+        onPressed: () => showModalBottomSheet(
+          context: context,
+          builder: (ctx) => SafeArea(
+            child: Wrap(children: [
+              ListTile(
+                leading: const Icon(Icons.sync),
+                title: const Text('Sync SMS now'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _sync(provider);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Add manually'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _addManual(provider);
+                },
+              ),
+            ]),
+          ),
+        ),
         child: const Icon(Icons.add),
       ),
     );
   }
 
-  void _showFilterDialog(BuildContext context, TransactionProvider provider) {
-    FilterDialog.show(
-      context,
-      provider.activeFilter,
-      (filter, range) {
-        provider.setFilter(filter, customRange: range);
-      },
+  Widget _permissionBanner(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      child: Material(
+        color: cs.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        child: ListTile(
+          leading: const Icon(Icons.sms_failed_outlined),
+          title: const Text('SMS access is off'),
+          subtitle: const Text('Transactions won\'t be captured automatically.'),
+          trailing: TextButton(
+            onPressed: () async {
+              final provider = context.read<TransactionProvider>();
+              final s = await Permission.sms.request();
+              if (s.isGranted) {
+                await provider.syncSms();
+              } else if (s.isPermanentlyDenied) {
+                await openAppSettings();
+              }
+            },
+            child: const Text('Allow'),
+          ),
+        ),
+      ),
     );
   }
 
-  void _showAddOptions(BuildContext context, TransactionProvider provider) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Wrap(
+  Widget _filterRow(BuildContext context, TransactionProvider provider, String label, int count) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          ListTile(
-            leading: const Icon(Icons.sync),
-            title: const Text('Sync SMS'),
-            onTap: () async {
-              Navigator.pop(ctx);
-              await provider.syncSms();
-              if (!context.mounted) return;
-              showToast(context, 'Synced!');
-            },
+          Flexible(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => FilterDialog.show(context, provider.activeFilter,
+                  (f, r) => provider.setFilter(f, customRange: r)),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: cs.outlineVariant),
+                  borderRadius: BorderRadius.circular(12),
+                  color: cs.surfaceContainerHighest,
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.calendar_today, size: 16, color: cs.onSurfaceVariant),
+                  const SizedBox(width: AppSpacing.sm),
+                  Flexible(
+                    child: Text(label,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                  Icon(Icons.arrow_drop_down, color: cs.onSurfaceVariant),
+                ]),
+              ),
+            ),
           ),
-          ListTile(
-            leading: const Icon(Icons.edit),
-            title: const Text('Add Manually'),
-            onTap: () {
-              Navigator.pop(ctx);
-              _showManualEntryDialog(context, provider);
-            },
-          ),
+          const SizedBox(width: AppSpacing.sm),
+          Text('$count items', style: TextStyle(color: cs.onSurfaceVariant)),
         ],
       ),
     );
   }
 
-  void _showManualEntryDialog(BuildContext context, TransactionProvider provider) {
-    final amountController = TextEditingController();
-    final merchantController = TextEditingController();
-    String type = 'DEBIT';
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Add Transaction'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: amountController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: '₹ ',
-                ),
-              ),
-              TextField(
-                controller: merchantController,
-                decoration: const InputDecoration(labelText: 'Merchant / Description'),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  const Text('Type: '),
-                  DropdownButton<String>(
-                    value: type,
-                    items: const [
-                      DropdownMenuItem(value: 'DEBIT', child: Text('Expense')),
-                      DropdownMenuItem(value: 'CREDIT', child: Text('Income')),
-                    ],
-                    onChanged: (val) {
-                      setState(() => type = val!);
-                    },
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                final amount = double.tryParse(amountController.text) ?? 0.0;
-                if (amount > 0 && merchantController.text.isNotEmpty) {
-                  provider.addTransaction(amount, type, merchantController.text);
-                  Navigator.pop(ctx);
-                }
-              },
-              child: const Text('Add'),
+  Widget _accountChips(TransactionProvider provider) {
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.sm),
+            child: ChoiceChip(
+              label: const Text('All accounts'),
+              selected: provider.accountFilter == null,
+              onSelected: (_) => provider.setAccountFilter(null),
             ),
-          ],
-        ),
+          ),
+          for (final a in provider.accounts)
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.sm),
+              child: ChoiceChip(
+                label: Text(a),
+                selected: provider.accountFilter == a,
+                onSelected: (sel) => provider.setAccountFilter(sel ? a : null),
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  Widget _buildSummaryCard(BuildContext context, TransactionProvider provider) {
+  Widget _summaryCard(BuildContext context, TransactionProvider provider) {
     final cs = Theme.of(context).colorScheme;
+    Widget item(String label, double amount, Color color) => Column(children: [
+          Text(label, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+          const SizedBox(height: AppSpacing.xs),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(formatMoney(amount),
+                maxLines: 1,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color)),
+          ),
+        ]);
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
       elevation: 0,
       color: cs.surfaceContainerHighest,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Row(
-          children: [
-            Expanded(
-              child: _summaryItem(context, 'Income', provider.totalIncome, AppColors.income(cs.brightness)),
-            ),
-            Container(height: 40, width: 1, color: cs.outlineVariant),
-            Expanded(
-              child: _summaryItem(context, 'Expenses', provider.totalExpense, AppColors.expense(cs.brightness)),
-            ),
-          ],
-        ),
+        child: Row(children: [
+          Expanded(child: item('Income', provider.totalIncome, AppColors.income(cs.brightness))),
+          Container(height: 40, width: 1, color: cs.outlineVariant),
+          Expanded(child: item('Expenses', provider.totalExpense, AppColors.expense(cs.brightness))),
+        ]),
       ),
     );
   }
+}
 
-  Widget _summaryItem(BuildContext context, String label, double amount, Color color) {
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _MenuRow(this.icon, this.label);
+  @override
+  Widget build(BuildContext context) =>
+      Row(children: [Icon(icon), const SizedBox(width: 8), Text(label)]);
+}
+
+class _TransactionTile extends StatelessWidget {
+  final TransactionModel txn;
+  final String category;
+  const _TransactionTile({required this.txn, required this.category});
+
+  @override
+  Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Column(
-      children: [
-        Text(label, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
-        const SizedBox(height: AppSpacing.xs),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            '₹${amount.toStringAsFixed(2)}',
-            maxLines: 1,
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color),
-          ),
-        ),
-      ],
+    final color = txn.isTransfer
+        ? cs.onSurfaceVariant
+        : (txn.type == 'DEBIT' ? AppColors.expense(cs.brightness) : AppColors.income(cs.brightness));
+    final icon = txn.isTransfer
+        ? Icons.swap_horiz
+        : (txn.type == 'DEBIT' ? Icons.arrow_upward : Icons.arrow_downward);
+    final sign = txn.isTransfer ? '' : (txn.type == 'DEBIT' ? '- ' : '+ ');
+    final meta = [
+      DateFormat('d MMM, HH:mm').format(txn.timestamp),
+      category,
+      if (txn.account != null) txn.account!,
+    ].join(' · ');
+    return ListTile(
+      onTap: () => showTransactionSheet(context, txn),
+      leading: CircleAvatar(
+        backgroundColor: color.withValues(alpha: 0.15),
+        child: Icon(icon, color: color),
+      ),
+      title: Text(txn.merchant,
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Row(children: [
+        Icon(txn.source == 'SMS' ? Icons.message : Icons.person, size: 14, color: cs.onSurfaceVariant),
+        const SizedBox(width: AppSpacing.xs),
+        Expanded(child: Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis)),
+      ]),
+      trailing: Text(
+        '$sign${formatMoney(txn.amount)}',
+        style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 16),
+      ),
     );
   }
 }

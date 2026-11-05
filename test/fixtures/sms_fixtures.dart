@@ -1,0 +1,216 @@
+/// Realistic Indian bank SMS fixtures (bodies anonymised; formats follow what
+/// each bank actually sends). `expect == null` means "must NOT be recorded".
+class SmsFixture {
+  final String name;
+  final String sender;
+  final String body;
+  final Expected? expect;
+  const SmsFixture(this.name, this.sender, this.body, this.expect);
+}
+
+class Expected {
+  final String type; // CREDIT / DEBIT
+  final double amount;
+  final String? merchant; // exact match when given
+  final String kind; // NORMAL / TRANSFER
+  final String? account; // XX1234 when given
+  const Expected(this.type, this.amount,
+      {this.merchant, this.kind = 'NORMAL', this.account});
+}
+
+const debit = 'DEBIT';
+const credit = 'CREDIT';
+const transfer = 'TRANSFER';
+
+const fixtures = <SmsFixture>[
+  // ---------------- HDFC ----------------
+  SmsFixture('hdfc upi debit', 'AD-HDFCBK-S',
+      'Sent Rs.250.00\nFrom HDFC Bank A/C *1234\nTo SWIGGY\nOn 05/11/26\nRef 412345678901\nNot You?\nCall 18002586161/SMS BLOCK UPI to 7308080808',
+      Expected(debit, 250, merchant: 'SWIGGY', account: 'XX1234')),
+  SmsFixture('hdfc card spend amazon', 'VM-HDFCBK',
+      'Rs.499 spent on HDFC Bank Card x1234 at Amazon on 2026-11-01:10:22:11. Not you? Call 18002586161',
+      Expected(debit, 499, merchant: 'Amazon', account: 'XX1234')),
+  SmsFixture('hdfc credit upi', 'AD-HDFCBK',
+      'Money Received - INR 1,500.00 in your HDFC Bank A/c xx1234 on 05-11-26 from Rahul Sharma (rahul.s@okaxis). UPI Ref No 412345678902. Avl bal: INR 25,000.00',
+      Expected(credit, 1500, merchant: 'Rahul Sharma', account: 'XX1234')),
+  SmsFixture('hdfc salary neft', 'JD-HDFCBK-S',
+      'Update! INR 85,000.00 deposited in HDFC Bank A/c XX1234 on 01-NOV-26 for NEFT Cr-ACME TECHNOLOGIES PVT LTD. Avl bal INR 1,10,000.00',
+      Expected(credit, 85000, account: 'XX1234')),
+  SmsFixture('hdfc card bill payment', 'VM-HDFCBK',
+      'HDFC Bank Cardmember, Payment of Rs 96475.04 was credited to your card ending 0853 on09/JUL/2026',
+      Expected(debit, 96475.04, kind: transfer, account: 'XX0853')),
+  SmsFixture('hdfc card refund with payment word', 'VM-HDFCBK',
+      'Rs 899 refunded to your HDFC Bank Credit Card xx1234 for your payment at Amazon',
+      Expected(credit, 899, account: 'XX1234')),
+  SmsFixture('hdfc refund processed', 'VM-HDFCBK',
+      'Refund of Rs 899.00 from Amazon processed to your HDFC Bank Credit Card xx1234',
+      Expected(credit, 899, merchant: 'Amazon', account: 'XX1234')),
+  SmsFixture('hdfc otp', 'VM-HDFCBK',
+      '123456 is your OTP for txn of Rs 2,500.00 at FLIPKART on HDFC Bank card xx1234. Valid 10 mins. Do not share.',
+      null),
+  SmsFixture('hdfc bill due', 'VM-HDFCBK',
+      'Your HDFC Bank Credit Card xx1234 bill of Rs 12,345.00 is due on 15-Nov-26. Min amount due Rs 620. Pay now',
+      null),
+  SmsFixture('hdfc statement', 'VM-HDFCBK',
+      'Statement for HDFC Bank Card xx1234: Total due Rs 8,450.00, Minimum due Rs 423.00, payment due by 20-Nov-26.',
+      null),
+  SmsFixture('hdfc emi offer', 'HDFCBK',
+      'Convert spends of Rs.15610 on HDFC Bank Credit Card xx0853 to simple monthly EMIs via PayZapp. Check details http://hdfc.bank/x T&C',
+      null),
+  SmsFixture('hdfc emi debit', 'HDFCBK',
+      'Rs 5000 EMI debited from a/c XX1234 towards HDFC loan. Ref 998877',
+      Expected(debit, 5000, account: 'XX1234')),
+
+  // ---------------- ICICI ----------------
+  SmsFixture('icici upi debit (credited counterparty)', 'AD-ICICIB',
+      'ICICI Bank Acct XX123 debited for Rs 250.00 on 05-Nov-26; Swiggy credited. UPI:412345678901. Call 18002662 for dispute. SMS BLOCK 123 to 9215676766.',
+      Expected(debit, 250, merchant: 'Swiggy', account: 'XX123')),
+  SmsFixture('icici card spend', 'VM-ICICIB',
+      'INR 1,299.00 spent using ICICI Bank Card XX9876 on 04-Nov-26 on IND*Amazon. Avl Limit: INR 45,000.00. If not you, call 1800 2662/SMS BLOCK 9876 to 9215676766',
+      Expected(debit, 1299, merchant: 'IND*Amazon', account: 'XX9876')),
+  SmsFixture('icici credit', 'AD-ICICIB-S',
+      'Dear Customer, Acct XX123 is credited with Rs 2,000.00 on 03-Nov-26 from PRIYA K. UPI:412345678903-ICICI Bank.',
+      Expected(credit, 2000, merchant: 'PRIYA K', account: 'XX123')),
+  SmsFixture('icici card payment received', 'ICICIB',
+      'Payment of Rs 5000 received towards your Credit Card ending 1234',
+      Expected(debit, 5000, kind: transfer, account: 'XX1234')),
+  SmsFixture('icici autopay upcoming', 'VM-ICICIB',
+      'Rs 499.00 will be debited from your ICICI Bank Acct XX123 on 10-Nov-26 towards Netflix AutoPay mandate.',
+      null),
+
+  // ---------------- SBI ----------------
+  SmsFixture('sbi upi debit', 'AD-SBIUPI-S',
+      'Dear UPI user A/C X9876 debited by 300.0 on date 05Nov26 trf to UBER INDIA Refno 412345678904. If not u? call 1800111109. -SBI',
+      Expected(debit, 300, merchant: 'UBER INDIA', account: 'XX9876')),
+  SmsFixture('sbi credit', 'JM-SBIINB',
+      'Dear Customer, Your A/C XXXXX9876 has been credited by Rs.10,000.00 on 02/11/26 by transfer from RAMESH. Avl Bal Rs 55,000.00 -SBI',
+      Expected(credit, 10000, account: 'XX9876')),
+  SmsFixture('sbi reversal', 'AD-SBIINB',
+      'Rs 1500 debited from your a/c XX9876 has been reversed on 05-11-26. -SBI',
+      Expected(credit, 1500, account: 'XX9876')),
+  SmsFixture('sbi failed', 'AD-SBICRD',
+      'Your transaction of Rs 1500 at Myntra on SBI Card ending 4321 has failed. Amount debited, if any, will be reversed in 5-7 days.',
+      null),
+  SmsFixture('sbi atm', 'BZ-SBIINB',
+      'Dear Customer, Rs.2000 withdrawn at ATM S1AW000123 from A/c X9876 on 04Nov26. Avl Bal Rs.53000. If not done by you, call 1800111109 -SBI',
+      Expected(debit, 2000, account: 'XX9876')),
+  SmsFixture('sbi card spend', 'AD-SBICRD',
+      'Rs.1,250.50 spent on your SBI Credit Card ending 4321 at BIG BAZAAR on 03/11/26. Trxn. not done by you? Report at https://sbicard.com/Dispute',
+      Expected(debit, 1250.5, merchant: 'BIG BAZAAR', account: 'XX4321')),
+
+  // ---------------- Axis ----------------
+  SmsFixture('axis 1-decimal amount', 'AD-AXISBK',
+      'Rs.100.5 debited from A/c XX1234 for UPI to Zomato. Ref 412345678905',
+      Expected(debit, 100.5, merchant: 'Zomato', account: 'XX1234')),
+  SmsFixture('axis balance first', 'AD-AXISBK',
+      'Avl Bal Rs 45,000.00. A/c XX1234 debited by Rs 300.00 on 05-Nov for UPI to Uber',
+      Expected(debit, 300, merchant: 'Uber', account: 'XX1234')),
+  SmsFixture('axis zero amount', 'AD-AXISBK',
+      'Rs 0.00 debited from A/c XX1234 towards mandate verification',
+      null),
+  SmsFixture('axis debit info', 'VK-AXISBK-S',
+      'INR 750.00 debited\nA/c no. XX1234\n05-11-26, 14:22:10\nUPI/P2M/412345678906/BLINKIT\nNot you? SMS BLOCKUPI Cust ID to 919951860002\nAxis Bank',
+      Expected(debit, 750, merchant: 'BLINKIT', account: 'XX1234')),
+  SmsFixture('axis card spend', 'AX-AXISBK',
+      'Spent INR 2,340 Axis Bank Card no. XX5566 05-11-26 13:01:12 IST DMART Avl Limit: INR 1,20,000 Not you? SMS BLOCK 5566 to 919951860002',
+      Expected(debit, 2340, account: 'XX5566')),
+
+  // ---------------- Kotak ----------------
+  SmsFixture('kotak sent to krishna', 'JD-KOTAKB',
+      'Sent Rs.120.00 from Kotak Bank AC X5678 to Krishna Stores on 05-11-26.UPI Ref 412345678907. Not you, https://kotak.com/fraud',
+      Expected(debit, 120, merchant: 'Krishna Stores', account: 'XX5678')),
+  SmsFixture('kotak received', 'JD-KOTAKB-S',
+      'Received Rs.450.00 in your Kotak Bank AC X5678 from anita@oksbi on 05-11-26.UPI Ref:412345678908.',
+      Expected(credit, 450, merchant: 'anita', account: 'XX5678')),
+
+  // ---------------- Others ----------------
+  SmsFixture('pnb debit', 'BP-PNBSMS',
+      'Your A/c XX7890 is debited for Rs 1,000.00 on 05-11-2026 by UPI ref 412345678909. Avl Bal Rs 9,500.00 -PNB',
+      Expected(debit, 1000, merchant: 'Unknown', account: 'XX7890')),
+  SmsFixture('bob credit', 'AD-BOBTXN',
+      'Rs.3000.00 Credited to A/c ...4567 thru UPI/412345678910 by ramu@ybl. Total Bal:Rs.15000.00CR. Avlbl Amt:Rs.15000.00(05-11-2026 10:10:10) - Bank of Baroda',
+      Expected(credit, 3000, account: 'XX4567')),
+  SmsFixture('idfc debit', 'AD-IDFCFB',
+      'Your A/C XXXXXXX1122 has been debited by INR 640.00 on 05/11/2026 towards UPI/412345678911/PVR CINEMAS. Avl Bal INR 12,000.00',
+      Expected(debit, 640, merchant: 'PVR CINEMAS', account: 'XX1122')),
+  SmsFixture('yes bank card', 'VM-YESBNK',
+      'INR 899.00 spent on YES BANK Card X3344 @SPOTIFY 05-11-2026 09:00:00. Avl Lmt INR 50,000.00',
+      Expected(debit, 899, merchant: 'SPOTIFY', account: 'XX3344')),
+  SmsFixture('paytm wallet', 'VM-PAYTMB',
+      'Paid Rs.60 to Chai Point from Paytm Wallet. Updated Balance: Rs.340. Txn ID 412345678912',
+      Expected(debit, 60, merchant: 'Chai Point')),
+  SmsFixture('amex spend', 'AX-AMEXIN',
+      'Alert: You\'ve spent INR 3,450.00 on your AMEX card ** 31005 at MAKEMYTRIP INDIA on 4 November 2026 at 08:15 PM IST.',
+      Expected(debit, 3450, merchant: 'MAKEMYTRIP INDIA', account: 'XX1005')),
+  SmsFixture('indusind credit interest', 'AD-INDUSB',
+      'Rs 250 interest credited to your savings account XX1234 on 31-10-26.',
+      Expected(credit, 250, account: 'XX1234')),
+  SmsFixture('federal debit', 'AD-FEDBNK',
+      'Rs 2,200.00 debited from your A/c XX4455 via IMPS to Ravi Kumar on 05NOV2026. Ref no 412345678913. Bal Rs 7,800.00',
+      Expected(debit, 2200, merchant: 'Ravi Kumar', account: 'XX4455')),
+  SmsFixture('canara debit', 'CP-CANBNK',
+      'An amount of INR 500.00 has been DEBITED to your account XXX667 on 05/11/2026 towards UPI. Total Avail.Bal INR 4,500.00 - Canara Bank',
+      Expected(debit, 500, account: 'XX667')),
+  SmsFixture('cashback credit', 'HDFCBK',
+      'Rs 50 cashback credited to your card ending 0853',
+      Expected(credit, 50, account: 'XX0853')),
+
+  // ---------------- Transfers between own accounts ----------------
+  SmsFixture('self transfer', 'AD-HDFCBK',
+      'Rs 5000 transferred from A/c XX1234 to your A/c XX5678. Ref 412345678999',
+      Expected(debit, 5000, kind: transfer, account: 'XX1234')),
+  SmsFixture('self transfer word', 'AD-ICICIB',
+      'Rs 10,000.00 debited from Acct XX123 for self transfer to A/c XX5678. IMPS Ref 412345678914',
+      Expected(debit, 10000, kind: transfer, account: 'XX123')),
+
+  // ---------------- Must NOT be recorded ----------------
+  SmsFixture('personal sms (phone number)', '+919876543210',
+      'bro I paid Rs 400 for the cab, send me your half', null),
+  SmsFixture('personal sms with a/c words', '9876543210',
+      'Rs 2000 credited to your account, check pls', null),
+  SmsFixture('merchant confirmation (no account)', 'VM-BMSHOW',
+      'Yours 2 tickets for Inception booked. Amount paid Rs 500 via UPI. BookMyShow', null),
+  SmsFixture('promotional header', 'AD-HDFCBK-P',
+      'Rs 500 credited to your a/c XX1234', null),
+  SmsFixture('collect request', 'AD-HDFCBK',
+      'Rahul has requested money of Rs 300 from your A/c XX1234 on UPI. Ignore if not known.',
+      null),
+  SmsFixture('balance only', 'AD-HDFCBK',
+      'Available balance in your A/c XX1234 is Rs 23,450.00 as on 05-11-26.', null),
+  SmsFixture('declined', 'VM-ICICIB',
+      'Transaction of INR 5,000 on ICICI Bank Card XX9876 declined due to incorrect PIN.',
+      null),
+  SmsFixture('insufficient', 'AD-SBIINB',
+      'Your UPI txn of Rs 999 from A/c X9876 could not be processed due to insufficient balance.',
+      null),
+  // ---------------- Card bill payment seen from the bank side ----------------
+  SmsFixture('bank-side card bill payment', 'AD-HDFCBK',
+      'Rs 12,000.00 debited from A/c XX1234 towards HDFC Bank Credit Card payment. Ref 412345678915',
+      Expected(debit, 12000, kind: transfer, account: 'A/c XX1234')),
+  SmsFixture('card swipe is not a bill payment', 'VM-HDFCBK',
+      'Rs 349 spent on HDFC Bank Card x1234 at Netflix for subscription payment on 2026-11-02',
+      Expected(debit, 349, merchant: 'Netflix', account: 'Card XX1234')),
+  SmsFixture('wallet account', 'VM-PAYTMB',
+      'Rs.120 added to your Paytm Wallet from HDFC Bank. Txn ID 412345678916',
+      Expected(credit, 120, account: 'Wallet')),
+
+  SmsFixture('loan offer', 'HDFCBK',
+      'Congratulations! You have a pre-approved personal loan of Rs 500000 @10.5% p.a. Avail now!',
+      null),
+  SmsFixture('benefit promo', 'HDFCBK',
+      'Congratulations! New Benefit is added on your HDFC Bank Credit Card xx0853. Enjoy!',
+      null),
+  SmsFixture('hurry promo', 'HDFCBK',
+      'HURRY! Flat 30% off up to Rs 2000 on your HDFC Card at Myntra. Shop now', null),
+  SmsFixture('promo with spent', 'HDFCBK',
+      'You spent Rs 15610 on your HDFC Card. Convert to easy EMI now! T&C apply', null),
+  SmsFixture('scheduled', 'AD-AXISBK',
+      'Your SIP of Rs 2,000 is scheduled to be debited from A/c XX1234 on 10-Nov-26.',
+      null),
+  SmsFixture('overdue', 'AD-SBICRD',
+      'Your SBI Card ending 4321 payment of Rs 3,200 is overdue. Please pay immediately.',
+      null),
+  SmsFixture('code is', 'AD-KOTAKB',
+      'Your code is 845123 to authorise Rs 1,000 debit from A/c X5678. Valid for 5 min.',
+      null),
+];

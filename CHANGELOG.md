@@ -5,6 +5,54 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-05
+Accuracy, privacy and a lot of new features. On first launch after updating, SMS
+transactions are re-imported once with the new parser (manual entries, balances,
+name and theme are kept), because the old parser had the errors fixed below.
+
+### Fixed
+- ICICI-style debits ("Acct debited ...; Swiggy credited") were recorded as income. The first debit/credit word now decides.
+- Merchant names were cut inside words ("Amazon" became "Amaz", "Krishna" became "Kr"), and "sent from Kotak AC X5678 to Krishna" picked the user's own account as the merchant.
+- OTPs, failed/declined payments, bill-due and statement reminders, scheduled debits and money requests were recorded as spends. Reversals and refunds now count as income.
+- Personal SMS ("bro I paid Rs 400") were recorded. Only bank-style sender IDs are accepted, and promotional senders are skipped.
+- Wrong amounts: `Rs.100.5` read as 100, "yours 2 tickets" read as Rs 2, a balance quoted first was taken as the amount, and ₹0 rows were saved.
+- A refund with the same reference as its purchase was silently dropped as a duplicate.
+- Credit-card spend was counted twice (swipe + bill payment), and own-account transfers showed as both expense and income. These are now transfers, excluded from totals.
+- Reconciliation mixed every account into one balance. It now works per bank account or across all bank accounts (cards excluded).
+- Deleting the newest SMS transaction brought it back on the next sync. Deleted SMS transactions now never return.
+- "Reset data" deleted manual entries. It's now "Re-import SMS transactions" and keeps manual entries, balances, categories and budgets.
+- The app crashed on start in builds without a Firebase config, and malformed push data could crash the reminder handler.
+- Two syncs could run at once (startup + pull-to-refresh).
+- Editing a transaction changed it on screen before it was saved. Manual entry had no decimal key, wasn't awaited, and accepted a blank merchant.
+
+### Security & privacy
+- Android cloud auto-backup is off; the database (which holds bank SMS text) no longer goes to Google Drive.
+- A disclosure screen explains exactly what's read before the SMS permission is requested.
+- Push reminders can be turned off in Settings (unsubscribes and deletes the push token).
+- CSV export guards against spreadsheet formula injection, and exported files no longer linger in the cache.
+- Backup restore validates every table, column and value before writing, in one all-or-nothing transaction.
+
+### Added
+- Onboarding with a progress bar for the first import.
+- Categories with built-in rules for common merchants and your own editable merchant rules.
+- Budgets per category, with a dashboard warning at 90%.
+- Recurring payment and subscription detection on Statistics, plus a category breakdown.
+- Per-account tracking from the `A/c XX1234` / `Card XX1234` suffix, with an account filter on the dashboard.
+- Mark any transaction as a transfer; matching debit/credit pairs across your accounts are detected automatically.
+- Background sync every few hours (WorkManager), plus sync when you return to the app. Automatic sync is on by default.
+- Full backup and restore to a file you keep.
+- Home-screen widget with this month's spend and income.
+- Settings screen (sync, reminders, name, theme, category rules, backup, re-import).
+- Transaction details sheet showing the original SMS.
+
+### Changed
+- The transaction list is computed once per change instead of once per row, and the SMS text isn't held in memory with the list.
+- Fresh clones build without secrets: no Firebase config means no push reminders, no keystore means debug signing. The release workflow refuses to publish without signing secrets.
+- CI runs analyze, tests and a debug APK build on every push; releases run analyze and tests first and use Flutter 3.41.6.
+- Android Gradle Plugin 8.9.1, Kotlin 2.1.0, Gradle 8.11.1; min SDK 23.
+- 107 automated tests (was 16), including 60+ real-world SMS fixtures across 14 banks.
+- README rewritten; analyzer warnings fixed; the template widget test replaced.
+
 ## [2.2.0] - 2026-08-06
 ### Added
 - **Search** transactions by merchant or amount (search icon in the app bar).
