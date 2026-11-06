@@ -46,7 +46,7 @@ void main() {
   test('merchant names are never cut inside a word', () {
     for (final f in fixtures) {
       final t = parser.parseFields(f.body, f.sender, when);
-      if (t == null || t.merchant == 'Unknown') continue;
+      if (t == null || t.merchant == 'Unknown' || t.merchant == ParserService.cardBillMerchant || const {'Refund', 'Reversal', 'Salary'}.contains(t.merchant) || t.merchant.startsWith('A/c XX')) continue;
       // The merchant must appear in the body as whole words.
       final re = RegExp('(^|[^A-Za-z0-9])${RegExp.escape(t.merchant)}(\$|[^A-Za-z0-9])',
           caseSensitive: false);

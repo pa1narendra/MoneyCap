@@ -3,7 +3,7 @@ import 'db_service.dart';
 
 /// Opening/closing balance prompts and reconciliation.
 ///
-/// Reconciliation is per account (`account` = e.g. `A/c XX1234`), or `''` for
+/// Reconciliation is per account (`account` = e.g. `HDFC A/c XX1234`), or `''` for
 /// all bank accounts combined. Transfers ARE included here: they really moved
 /// money in and out of the account (an own-account transfer nets to zero
 /// across the combined view). Card rows are excluded from the combined view
@@ -11,21 +11,32 @@ import 'db_service.dart';
 class BalanceService {
   final DatabaseHelper _db = DatabaseHelper.instance;
 
-  Future<BalancePrompt?> checkBalancePrompt() async {
-    final now = DateTime.now();
-    final month = DateFormat('yyyy-MM').format(now);
-    final balance = await _db.getMonthlyBalance(month);
+  /// The next balance to ask for: each active bank account gets its own
+  /// opening balance in the first 5 days of the month and closing balance in
+  /// the last 3. With no bank account seen yet it asks for one combined figure.
+  /// [skip] holds accounts the user skipped this session.
+  Future<BalancePrompt?> checkBalancePrompt({DateTime? at, Set<String> skip = const {}}) async {
+    final now = at ?? DateTime.now();
     final lastDay = DateTime(now.year, now.month + 1, 0).day;
-    final monthName = DateFormat('MMMM yyyy').format(now);
+    final isOpening = now.day <= 5;
+    if (!isOpening && now.day < lastDay - 2) return null;
 
-    // Opening: during the first 5 days if not recorded (fallback for a push
-    // that never arrived).
-    if (now.day <= 5 && (balance == null || balance['opening_balance'] == null)) {
-      return BalancePrompt(type: PromptType.opening, month: month, monthName: monthName);
-    }
-    // Closing: during the last 3 days if not recorded.
-    if (now.day >= lastDay - 2 && (balance == null || balance['closing_balance'] == null)) {
-      return BalancePrompt(type: PromptType.closing, month: month, monthName: monthName);
+    final month = DateFormat('yyyy-MM').format(now);
+    final monthName = DateFormat('MMMM yyyy').format(now);
+    final found = await _db.activeBankAccounts(now.subtract(const Duration(days: 90)));
+    final accounts = found.isEmpty ? const [''] : found;
+    final column = isOpening ? 'opening_balance' : 'closing_balance';
+    for (final account in accounts) {
+      if (skip.contains(account)) continue;
+      final balance = await _db.getMonthlyBalance(month, account: account);
+      if (balance == null || balance[column] == null) {
+        return BalancePrompt(
+          type: isOpening ? PromptType.opening : PromptType.closing,
+          month: month,
+          monthName: monthName,
+          account: account,
+        );
+      }
     }
     return null;
   }
@@ -59,7 +70,14 @@ class BalancePrompt {
   final PromptType type;
   final String month;
   final String monthName;
-  BalancePrompt({required this.type, required this.month, required this.monthName});
+  /// Which account this is for; '' = all bank accounts combined.
+  final String account;
+  BalancePrompt({
+    required this.type,
+    required this.month,
+    required this.monthName,
+    this.account = '',
+  });
 
   /// Parses a `type:yyyy-MM` notification payload. Returns null for anything
   /// malformed (payloads come from push data, which is untrusted input).

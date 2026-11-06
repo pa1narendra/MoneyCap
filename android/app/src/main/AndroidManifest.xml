@@ -9,7 +9,7 @@
          never sent to Google Drive auto-backup. The only network use is
          Firebase Messaging receiving the generic monthly reminder push. -->
     <application
-        android:label="MoneyCap"
+        android:label="@string/app_name"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon"
         android:allowBackup="false"

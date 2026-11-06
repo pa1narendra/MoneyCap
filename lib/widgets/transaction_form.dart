@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../services/category_service.dart';
 import '../theme/app_theme.dart';
+import 'input_dialogs.dart';
 
 /// Result of [showTransactionForm].
 class TransactionDraft {
@@ -152,19 +152,14 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                 controller: _amount,
                 autofocus: widget.amount == null,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+                inputFormatters: amountFormatters(),
                 decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ '),
-                validator: (v) {
-                  final a = double.tryParse((v ?? '').trim());
-                  if (a == null || a <= 0) return 'Enter an amount above 0';
-                  if (a > 1e10) return 'That amount looks too large';
-                  return null;
-                },
+                validator: validateAmount,
               ),
               TextFormField(
                 controller: _merchant,
                 textCapitalization: TextCapitalization.words,
-                maxLength: 60,
+                maxLength: 120,
                 decoration: const InputDecoration(labelText: 'Merchant / description', counterText: ''),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Enter a description' : null,
               ),

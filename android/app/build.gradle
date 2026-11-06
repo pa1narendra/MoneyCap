@@ -57,6 +57,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs NEXT TO the real app, so testing a debug build never needs
+            // uninstalling the signed release or touches its data.
+            // `-Pdemo=true` is the screenshot build (fake data, no SMS access).
+            applicationIdSuffix = project.hasProperty("demo") ? ".demo" : ".debug"
+        }
         release {
             // Without android/key.properties (fresh clone, CI without secrets)
             // fall back to the debug key so `flutter build apk --release` still

@@ -40,6 +40,7 @@ class MyApp extends StatelessWidget {
     final settings = context.watch<SettingsProvider>();
     return MaterialApp(
       title: 'MoneyCap',
+      debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: settings.themeMode,

@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'parser_service.dart';
 import 'db_service.dart';
+import 'demo_data.dart';
 
 enum SyncStatus { ok, noPermission, error }
 
@@ -26,6 +27,7 @@ class SyncResult {
 class SmsService {
   static const _kWatermark = 'sms_watermark_ms';
   static const _kPendingRescan = 'pending_rescan_v5';
+  static const _kRescanConfirmed = 'rescan_confirmed_v5';
   static const _safetyLimit = 20000;
   static const _processChunk = 1000;
 
@@ -42,6 +44,7 @@ class SmsService {
   /// False (never throws) when the permission can't be checked, e.g. in a
   /// background isolate without the plugin or on a non-Android platform.
   static Future<bool> hasPermission() async {
+    if (kDemoMode) return true;
     try {
       return await Permission.sms.isGranted;
     } catch (_) {
@@ -56,7 +59,46 @@ class SmsService {
     await prefs.remove(_kWatermark);
   }
 
+  /// True when an upgrade needs SMS rows rebuilt and the user hasn't been told.
+  static Future<bool> isRescanPending() async {
+    await DatabaseHelper.instance.database; // migrations set needsRescan
+    final prefs = await SharedPreferences.getInstance();
+    if (DatabaseHelper.needsRescan) {
+      DatabaseHelper.needsRescan = false;
+      await prefs.setBool(_kPendingRescan, true);
+    }
+    return (prefs.getBool(_kPendingRescan) ?? false) &&
+        !(prefs.getBool(_kRescanConfirmed) ?? false);
+  }
+
+  static Future<void> confirmRescan() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kRescanConfirmed, true);
+  }
+
+  /// Screenshot build: fake SMS through the real parser and duplicate check.
+  /// The real inbox is never touched.
+  Future<SyncResult> _demoSync(void Function(double)? onProgress) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('demo_seeded') ?? false) return const SyncResult(SyncStatus.ok);
+    final now = DateTime.now();
+    final raws = DemoData.sms(now);
+    for (var p = 0.2; p < 1; p += 0.2) {
+      onProgress?.call(p);
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    }
+    final ids = await _db.createAllRaw(parseSmsBatch(raws));
+    final hidden = await _db.resolveDuplicates(ids);
+    await _db.applySelfRules(ids);
+    await _db.pairTransfers(ids);
+    await DemoData.seedExtras(now);
+    await prefs.setBool('demo_seeded', true);
+    onProgress?.call(1);
+    return SyncResult(SyncStatus.ok, inserted: ids.length - hidden, scanned: raws.length);
+  }
+
   Future<SyncResult> _sync(void Function(double)? onProgress) async {
+    if (kDemoMode) return _demoSync(onProgress);
     try {
       final prefs = await SharedPreferences.getInstance();
       // The background isolate may have advanced the watermark; don't trust
@@ -70,6 +112,11 @@ class SmsService {
       }
       if (!await hasPermission()) return const SyncResult(SyncStatus.noPermission);
       if (prefs.getBool(_kPendingRescan) ?? false) {
+        // Clearing rows waits until the user has seen the backup reminder (a
+        // background sync can arrive first).
+        if (!(prefs.getBool(_kRescanConfirmed) ?? false)) {
+          return const SyncResult(SyncStatus.ok);
+        }
         // Rows from the old parser are unreliable: re-import from the inbox.
         await _db.deleteSmsTransactions();
         await prefs.remove(_kWatermark);
@@ -117,9 +164,14 @@ class SmsService {
         scanned += messages.length;
       }
 
+      // "inserted" is what the user sees: repeats of a payment don't count.
+      inserted -= await _db.resolveDuplicates(newIds);
+      await _db.applySelfRules(newIds);
       await _db.pairTransfers(newIds);
+      if (prefs.getBool(_kPendingRescan) ?? false) await _db.relinkOldAccountLabels();
       if (newest != null) await prefs.setInt(_kWatermark, newest.millisecondsSinceEpoch);
       await prefs.remove(_kPendingRescan);
+      await prefs.remove(_kRescanConfirmed);
       onProgress?.call(1);
       debugPrint('SMS sync: scanned $scanned, inserted $inserted in ${sw.elapsedMilliseconds}ms');
       return SyncResult(SyncStatus.ok, inserted: inserted, scanned: scanned);

@@ -3,6 +3,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/transaction_provider.dart';
+import '../services/demo_data.dart';
 import '../services/sms_service.dart';
 import '../theme/app_theme.dart';
 
@@ -31,11 +32,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _allowSms() async {
-    final status = await Permission.sms.request();
-    if (!mounted) return;
-    if (!status.isGranted) {
-      setState(() => _permanentlyDenied = status.isPermanentlyDenied);
-      return;
+    if (!kDemoMode) {
+      final status = await Permission.sms.request();
+      if (!mounted) return;
+      if (!status.isGranted) {
+        setState(() => _permanentlyDenied = status.isPermanentlyDenied);
+        return;
+      }
     }
     setState(() => _step = _Step.importing);
     final provider = context.read<TransactionProvider>();

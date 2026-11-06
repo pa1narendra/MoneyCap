@@ -4,6 +4,7 @@ import '../models/transaction_model.dart';
 import '../services/background_sync.dart';
 import '../services/backup_service.dart';
 import '../services/category_service.dart';
+import '../services/parser_service.dart';
 import '../services/db_service.dart';
 import '../services/insights_service.dart';
 import '../services/sms_service.dart';
@@ -43,6 +44,7 @@ class TransactionProvider with ChangeNotifier {
 
   List<TransactionModel> _transactions = const [];
   Map<String, String> _rules = const {};
+  Map<String, ({String name, bool isSelf})> _names = const {};
   Map<String, double> _budgets = const {};
   bool _isLoading = false;
   bool _isSyncing = false;
@@ -147,9 +149,16 @@ class TransactionProvider with ChangeNotifier {
 
   /// Called once the dashboard is visible: loads data and, if enabled and
   /// permitted, syncs.
-  Future<void> start() async {
+  ///
+  /// [beforeRescan] runs first when an update needs to re-read the inbox, so
+  /// the user can back up before SMS rows are cleared.
+  Future<void> start({Future<void> Function()? beforeRescan}) async {
     await _prefsReady;
     await Future.wait([loadTransactions(), _loadRulesAndBudgets()]);
+    if (await SmsService.isRescanPending()) {
+      await beforeRescan?.call();
+      await SmsService.confirmRescan();
+    }
     if (_isAutoSync && await SmsService.hasPermission()) await syncSms();
     await BackgroundSync.setEnabled(_isAutoSync && await SmsService.hasPermission());
   }
@@ -183,6 +192,7 @@ class TransactionProvider with ChangeNotifier {
   }
 
   Future<void> _loadRulesAndBudgets() async {
+    _names = await _db.getMerchantNames();
     _rules = await _db.getCategoryRules();
     _budgets = await _db.getBudgets();
     notifyListeners();
@@ -246,6 +256,29 @@ class TransactionProvider with ChangeNotifier {
     if (await SmsService.hasPermission()) await syncSms();
   }
 
+  // ---------------- names ----------------
+
+  /// Text the SMS uses for this transaction's merchant.
+  String smsNameOf(TransactionModel t) => t.originalMerchant ?? t.merchant;
+
+  /// Labels the app made up rather than read, and rows with no name at all,
+  /// have nothing that identifies a person, so a name can't follow them.
+  bool canName(TransactionModel t) =>
+      t.source == 'SMS' &&
+      !const {'Unknown', 'Refund', 'Reversal', 'Salary', ParserService.cardBillMerchant}
+          .contains(smsNameOf(t));
+
+  /// Is this merchant marked as the user's own account?
+  bool isSelf(TransactionModel t) => _names[Categories.merchantKey(smsNameOf(t))]?.isSelf ?? false;
+
+  /// Names every transaction from this merchant, past and future. [isSelf]
+  /// makes them transfers, because it's the user's own account.
+  Future<void> setMerchantName(TransactionModel t, String name, {required bool isSelf}) async {
+    await _db.setMerchantName(smsNameOf(t), name, isSelf: isSelf);
+    await _loadRulesAndBudgets();
+    await loadTransactions();
+  }
+
   // ---------------- categories & budgets ----------------
 
   /// Sets [category] on [txn]. With [applyToMerchant] it becomes a rule for
@@ -290,7 +323,12 @@ class TransactionProvider with ChangeNotifier {
 
   void setFilter(TimeFilter filter, {DateTimeRange? customRange}) {
     _activeFilter = filter;
-    if (filter == TimeFilter.custom && customRange != null) _customDateRange = customRange;
+    if (filter == TimeFilter.custom && customRange != null) {
+      // The date picker's end is midnight; include all of that last day.
+      final e = customRange.end;
+      _customDateRange = DateTimeRange(
+          start: customRange.start, end: DateTime(e.year, e.month, e.day, 23, 59, 59, 999));
+    }
     notifyListeners();
   }
 
@@ -326,6 +364,7 @@ class TransactionProvider with ChangeNotifier {
       if (q.isNotEmpty &&
           !t.merchant.toLowerCase().contains(q) &&
           !t.amount.toStringAsFixed(2).contains(q) &&
+          !(t.originalMerchant?.toLowerCase().contains(q) ?? false) &&
           !categoryOf(t).toLowerCase().contains(q)) {
         return false;
       }

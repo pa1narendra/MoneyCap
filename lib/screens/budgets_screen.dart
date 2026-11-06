@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/transaction_provider.dart';
 import '../services/category_service.dart';
 import '../services/insights_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/input_dialogs.dart';
 
 final _money = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
@@ -66,45 +66,95 @@ class BudgetsScreen extends StatelessWidget {
 
   Future<void> _edit(BuildContext context, TransactionProvider provider,
       {String? category, double? limit}) async {
-    var cat = category ?? Categories.food;
-    final c = TextEditingController(text: limit?.toStringAsFixed(0) ?? '');
     final existing = category != null && provider.budgets.containsKey(category);
-    final result = await showDialog<String>(
+    final result = await showDialog<_BudgetResult>(
       context: context,
-      builder: (d) => StatefulBuilder(
-        builder: (d, setState) => AlertDialog(
-          title: Text(existing ? 'Edit budget' : 'New budget'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
+      builder: (_) => BudgetDialog(category: category, limit: limit, existing: existing),
+    );
+    if (result == null) return;
+    if (result.remove) {
+      await provider.deleteBudget(result.category);
+    } else {
+      await provider.setBudget(result.category, result.limit!);
+    }
+  }
+}
+
+class _BudgetResult {
+  final String category;
+  final double? limit;
+  final bool remove;
+  const _BudgetResult(this.category, this.limit, {this.remove = false});
+}
+
+/// Add/edit one budget. Save with no limit shows an error and stays open.
+@visibleForTesting
+class BudgetDialog extends StatefulWidget {
+  final String? category;
+  final double? limit;
+  final bool existing;
+  const BudgetDialog({super.key, this.category, this.limit, this.existing = false});
+
+  @override
+  State<BudgetDialog> createState() => _BudgetDialogState();
+}
+
+class _BudgetDialogState extends State<BudgetDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final _limit = TextEditingController(text: widget.limit?.toStringAsFixed(0) ?? '');
+  late String _category = widget.category ?? Categories.food;
+
+  @override
+  void dispose() {
+    _limit.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(context, _BudgetResult(_category, double.parse(_limit.text.trim())));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A transaction can carry a category outside the expense list (say one
+    // set by hand), and a dropdown must contain its own current value.
+    final items = {...Categories.expenseCategories, _category};
+    return AlertDialog(
+      title: Text(widget.existing ? 'Edit budget' : 'New budget'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
             DropdownButtonFormField<String>(
-              initialValue: cat,
+              initialValue: _category,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Category'),
-              items: [
-                for (final x in Categories.expenseCategories) DropdownMenuItem(value: x, child: Text(x))
-              ],
-              onChanged: existing ? null : (v) => setState(() => cat = v!),
+              items: [for (final x in items) DropdownMenuItem(value: x, child: Text(x))],
+              onChanged: widget.existing ? null : (v) => setState(() => _category = v!),
             ),
-            TextField(
-              controller: c,
+            TextFormField(
+              controller: _limit,
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+              inputFormatters: amountFormatters(),
               decoration: const InputDecoration(labelText: 'Monthly limit', prefixText: '₹ '),
+              validator: validateAmount,
+              onFieldSubmitted: (_) => _save(),
             ),
           ]),
-          actions: [
-            if (existing)
-              TextButton(onPressed: () => Navigator.pop(d, 'delete'), child: const Text('Remove')),
-            TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(d, 'save'), child: const Text('Save')),
-          ],
         ),
       ),
+      actions: [
+        if (widget.existing)
+          TextButton(
+            onPressed: () => Navigator.pop(context, _BudgetResult(_category, null, remove: true)),
+            child: const Text('Remove'),
+          ),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
     );
-    final value = double.tryParse(c.text.trim());
-    c.dispose();
-    if (result == 'delete') await provider.deleteBudget(cat);
-    if (result == 'save' && value != null && value > 0) await provider.setBudget(cat, value);
   }
 }
 

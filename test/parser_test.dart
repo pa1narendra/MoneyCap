@@ -8,7 +8,7 @@ void main() {
 
   test('credit-card bill payment ("credited to your card") is DEBIT', () {
     final t = parser.parseFields(
-      'HDFC Bank Cardmember, Payment of Rs 96475.04 was credited to your card ending 0853 on09/JUL/2026',
+      'HDFC Bank Cardmember, Payment of Rs 96475.04 was credited to your card ending 9921 on09/JUL/2026',
       'HDFCBK',
       DateTime(2026, 7, 9),
     );
@@ -28,7 +28,7 @@ void main() {
 
   test('card refund stays CREDIT', () {
     final t = parser.parseFields(
-      'Rs 500 refund credited to your card ending 0853',
+      'Rs 500 refund credited to your card ending 9921',
       'HDFCBK',
       DateTime.now(),
     );
@@ -37,7 +37,7 @@ void main() {
 
   test('card cashback stays CREDIT', () {
     final t = parser.parseFields(
-      'Rs 50 cashback credited to your card ending 0853',
+      'Rs 50 cashback credited to your card ending 9921',
       'HDFCBK',
       DateTime.now(),
     );
@@ -48,7 +48,7 @@ void main() {
 
   test('EMI-conversion offer is NOT a transaction', () {
     final t = parser.parseFields(
-      'Convert spends of Rs.15610 on HDFC Bank Credit Card xx0853 to simple monthly EMIs via PayZapp. Check details http://hdfc.bank/x T&C',
+      'Convert spends of Rs.15610 on HDFC Bank Credit Card xx9921 to simple monthly EMIs via PayZapp. Check details http://hdfc.bank/x T&C',
       'HDFCBK',
       DateTime.now(),
     );
@@ -57,7 +57,7 @@ void main() {
 
   test('smart-EMI offer is NOT a transaction', () {
     final t = parser.parseFields(
-      'Convert your spends of Rs.24999 on HDFC Bank Credit Card xx0853 to smart EMI. T&C apply',
+      'Convert your spends of Rs.24999 on HDFC Bank Credit Card xx9921 to smart EMI. T&C apply',
       'HDFCBK',
       DateTime.now(),
     );
@@ -124,7 +124,7 @@ void main() {
 
   test('"Congratulations! New Benefit added on your card" is ignored', () {
     final t = parser.parseFields(
-      'Congratulations! New Benefit is added on your HDFC Bank Credit Card xx0853. Enjoy!',
+      'Congratulations! New Benefit is added on your HDFC Bank Credit Card xx9921. Enjoy!',
       'HDFCBK',
       DateTime.now(),
     );

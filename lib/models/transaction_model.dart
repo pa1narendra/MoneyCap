@@ -1,6 +1,9 @@
 class TransactionModel {
   static const kindNormal = 'NORMAL';
   static const kindTransfer = 'TRANSFER';
+  /// Another SMS already reports this payment. Hidden everywhere and counted
+  /// nowhere, but kept so it can be restored from Settings.
+  static const kindDuplicate = 'DUPLICATE';
 
   int? id;
   double amount;
@@ -19,6 +22,9 @@ class TransactionModel {
   String? account;
   /// User-chosen category override. Null means "use the merchant rules".
   String? category;
+  /// When the user named this merchant: the text the SMS actually says. Then
+  /// [merchant] holds the given name. Never stored on the row itself.
+  String? originalMerchant;
 
   TransactionModel({
     this.id,
@@ -32,11 +38,19 @@ class TransactionModel {
     this.kind = kindNormal,
     this.account,
     this.category,
+    this.originalMerchant,
   });
 
+  /// A credit card: spending here isn't in any bank balance until the bill is
+  /// paid. Debit cards are labelled `Debit`, because they are bank money.
+  static bool isCardAccount(String? account) => account?.contains('Card ') ?? false;
+
+  /// A bank account you can reconcile a balance against.
+  static bool isBankAccount(String? account) => account?.contains('A/c ') ?? false;
+
   bool get isTransfer => kind == kindTransfer;
-  bool get isExpense => type == 'DEBIT' && !isTransfer;
-  bool get isIncome => type == 'CREDIT' && !isTransfer;
+  bool get isExpense => type == 'DEBIT' && kind == kindNormal;
+  bool get isIncome => type == 'CREDIT' && kind == kindNormal;
 
   Map<String, dynamic> toMap() {
     return {
@@ -92,6 +106,7 @@ class TransactionModel {
       kind: kind ?? this.kind,
       account: account ?? this.account,
       category: clearCategory ? null : (category ?? this.category),
+      originalMerchant: originalMerchant,
     );
   }
 }

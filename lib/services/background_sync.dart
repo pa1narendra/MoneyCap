@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
+import 'demo_data.dart';
 import 'sms_service.dart';
 import 'widget_service.dart';
 
@@ -36,7 +37,7 @@ class BackgroundSync {
   }
 
   static Future<void> setEnabled(bool on) async {
-    if (defaultTargetPlatform != TargetPlatform.android || kIsWeb) return;
+    if (defaultTargetPlatform != TargetPlatform.android || kIsWeb || kDemoMode) return;
     try {
       if (on) {
         await Workmanager().registerPeriodicTask(

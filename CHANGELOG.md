@@ -5,6 +5,31 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-07
+Tested against a real inbox of 11,000+ messages, which found problems the sample messages in 3.0.0 missed. On first launch after updating, SMS transactions are rebuilt once with the improved parser. A reminder offers a backup first. Manual entries, balances, categories and budgets are kept, but edits made to SMS transactions are not.
+
+### Fixed
+- **One payment noted two or three times.** A credit card bill reported by both the bank and the card now shows as a single transfer, and it no longer counts as income or expense. Other repeats of the same payment are matched across messages too. Two messages with different bank references stay separate, because they are real separate payments.
+- Gaming wallet bonuses, food-app credits, shopping gift cards, mutual fund notices, payment gateway refund notices and cashback promos were counted as income or expense. Senders must now be a bank or payment issuer, or look unmistakably like a bank alert.
+- Refunds that were only "initiated" were counted, then counted again when completed.
+- Missed real transactions: SBI's "has credit for", and "Txn Rs" UPI payments on a credit card. FamPay's "sent to your account" read as money going out.
+- Merchant names were cut at 40 characters, and many showed Unknown or a wrong word ("block", "report") when the SMS did name someone: NEFT payers, IMPS senders, masked UPI IDs like `*1234@ybl`, bank fees, and names like "URS PHARMA", "M BAL RAJ" and "L and T Metro". The list shows one line and the details show the whole name. Unknown now only appears when the SMS really has no name.
+- Input errors: closing a balance, budget, rule or name dialog threw an error, and leaving a field empty gave no visible message or just closed the dialog. Every field now shows what's wrong under it and stays open.
+- A debit card was treated like a credit card, which threw off its bank's reconciliation.
+- A custom date range left out its last day, and couldn't reach back before 2020.
+- The first-import count no longer includes repeated messages.
+
+### Added
+- **Name a UPI ID or payee** once and it shows on all its past and future payments, with the SMS text kept underneath.
+- **"This is me":** mark your own accounts so everything to or from them is a transfer, for the ones automatic matching misses.
+- **Hidden duplicates** in Settings: review the messages treated as repeats and restore any that were really separate payments.
+- **A backup reminder** before anything that clears or replaces data: re-importing SMS, restoring a backup, and the one-time rebuild after updating. Backing up is offered, never required.
+
+### Changed
+- **Each bank keeps its own balances.** Accounts are named from the SMS (`HDFC A/c XX1234`, `SBI A/c XX5678`, `HDFC Card XX9012`, `HDFC Debit XX3456`). Reconciliation opens on one bank, the monthly prompt asks for each bank, and a combined view is still available. Balances entered under 3.0.0's labels move to the new ones.
+- Debug builds install next to the signed app as `com.moneycap.app.debug`, and a demo build with made-up data produces the README screenshots, which are now in the README.
+- 198 automated tests (was 107), including 100+ SMS fixtures, many following formats from a real inbox with names and numbers changed.
+
 ## [3.0.0] - 2026-11-05
 Accuracy, privacy and a lot of new features. On first launch after updating, SMS
 transactions are re-imported once with the new parser (manual entries, balances,

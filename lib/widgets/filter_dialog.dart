@@ -95,7 +95,7 @@ class FilterDialog extends StatelessWidget {
                     final now = DateTime.now();
                     final picked = await showDateRangePicker(
                       context: context,
-                      firstDate: DateTime(2020),
+                      firstDate: DateTime(2015),
                       lastDate: now,
                       initialDateRange: DateTimeRange(
                         start: now.subtract(const Duration(days: 7)),

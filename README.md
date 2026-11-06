@@ -8,6 +8,12 @@ Built for my own daily use because every existing expense app made one of two
 trade-offs I didn't want: either it demanded I enter every transaction manually,
 or it asked for access to my banking or payment apps. I wanted a third option.
 
+| Dashboard | One account or card at a time | Spending by category |
+|---|---|---|
+| <img src="docs/screenshots/05-dashboard.png" width="240" alt="Dashboard with income, expenses, account filters and transactions"> | <img src="docs/screenshots/06-per-account.png" width="240" alt="Dashboard filtered to a single credit card"> | <img src="docs/screenshots/09-stats-categories.png" width="240" alt="Statistics with spending by category"> |
+
+<sub>Every screenshot here comes from a demo build with made-up data, never a real inbox.</sub>
+
 ---
 
 ## Download and install
@@ -54,15 +60,37 @@ It's distributed here directly rather than through the Play Store (see
 - **Budgets** per category, with a dashboard warning at 90%.
 - **Recurring payments and subscriptions** detected from your history, with the
   next expected date and the monthly total.
-- **Per-account view** using the `A/c XX1234` / `Card XX1234` suffix in each SMS.
-- **Monthly reconciliation** per bank account: enter opening and closing balances
+- **Each bank and card kept apart,** named from the SMS: `HDFC A/c XX1234`, `SBI A/c XX5678`,
+  `HDFC Card XX9012`. Debit cards count as bank money, credit cards don't.
+- **Monthly reconciliation for each bank separately:** enter its opening and closing balances
   and MoneyCap shows exactly how far off the records are and helps you add what's
   missing.
 - **Statistics:** 6-month trend, month vs month comparison, category breakdown,
   top merchants.
 - **Home-screen widget** with this month's spend and income.
 - **Full backup and restore** to a file you keep, and CSV export.
+- **Name people the SMS leaves anonymous.** Banks often send only a masked UPI ID, so you can
+  name it once for all its payments, and mark your own accounts so transfers stay out of totals.
 - **Search, edit, delete, manual entry.** Deleted SMS transactions stay deleted.
+
+### First run
+
+It explains what it reads before Android asks for SMS access, then imports your
+past transactions.
+
+| Welcome | What it reads | Import | Done |
+|---|---|---|---|
+| <img src="docs/screenshots/01-welcome.png" width="180" alt="Welcome screen with a name field"> | <img src="docs/screenshots/02-sms-disclosure.png" width="180" alt="Explanation of SMS access before the permission prompt"> | <img src="docs/screenshots/03-importing.png" width="180" alt="Import progress bar"> | <img src="docs/screenshots/04-import-done.png" width="180" alt="Import finished with a transaction count"> |
+
+### Around the app
+
+| 6-month trend | Recurring payments | Budgets |
+|---|---|---|
+| <img src="docs/screenshots/08-stats-trend.png" width="240" alt="Monthly spending chart and month comparison"> | <img src="docs/screenshots/10-stats-recurring.png" width="240" alt="Detected recurring payments with next expected dates"> | <img src="docs/screenshots/11-budgets.png" width="240" alt="Budgets per category with progress bars"> |
+
+| Reconciliation | Settings |
+|---|---|
+| <img src="docs/screenshots/12-reconciliation.png" width="240" alt="Monthly balance reconciliation"> | <img src="docs/screenshots/13-settings.png" width="240" alt="Settings for sync, reminders, categories and data"> |
 
 ---
 
@@ -114,10 +142,35 @@ After a sync, a debit and a credit of the same amount on two of your accounts
 within 30 minutes are paired as a transfer. Anything the heuristics get wrong can
 be fixed from the transaction sheet.
 
-The parser is tested against 60+ realistic SMS from HDFC, ICICI, SBI, Axis, Kotak,
-PNB, BoB, IDFC, Yes, AmEx, Paytm, Federal, Canara and IndusInd in
-[`test/fixtures/sms_fixtures.dart`](test/fixtures/sms_fixtures.dart). When you hit
-an SMS that parses wrong, adding it there is the best bug report.
+The parser is tested against 90+ SMS from HDFC, ICICI, SBI, Axis, Kotak, PNB, BoB,
+IDFC, Yes, AmEx, Paytm, Federal, Canara and IndusInd, plus PhonePe and FamPay, in
+[`test/fixtures/sms_fixtures.dart`](test/fixtures/sms_fixtures.dart). Many of them
+follow formats from a real inbox of 11,000+ messages, with names and numbers
+changed. When you hit an SMS that parses wrong, adding it there is the best bug
+report.
+
+### One payment, several messages
+
+A single payment can send more than one SMS, and those messages don't always look
+alike. A credit card bill paid from a bank account can arrive as three different
+messages, from the bank and from the card, each with its own wording and reference.
+`lib/services/duplicate_detector.dart` handles this after parsing:
+
+- **Card bill payments** collapse to one row, the bank's when there is one, marked
+  as a transfer so it isn't counted as spending on top of the card swipes.
+- **The same payment reported twice** (same amount, direction and account, a
+  matching merchant, close in time) collapses when at least one of the messages has
+  no bank reference.
+- **Two different bank references are never merged.** Paying the same stall ₹30
+  several times in a minute is real, and merging on amount and time would silently
+  lose real spending.
+
+Repeats are hidden rather than deleted, so a wrong match can be put back from
+**Settings > Hidden duplicates**.
+
+| Every transaction keeps its original SMS | What was hidden, with Restore |
+|---|---|
+| <img src="docs/screenshots/07-transaction.png" width="240" alt="Transaction details with the original SMS and actions"> | <img src="docs/screenshots/14-hidden-duplicates.png" width="240" alt="List of hidden duplicate messages with restore buttons"> |
 
 ### Sync
 
@@ -136,7 +189,7 @@ uses Android WorkManager every ~6 hours.
 |---|---|
 | Framework | Flutter 3.41, Dart 3.5+, Material 3 light/dark |
 | State | `provider` |
-| Storage | `sqflite`, schema v5 (see below) |
+| Storage | `sqflite`, schema v6 (see below) |
 | SMS | `flutter_sms_inbox` + `permission_handler` |
 | Background sync | `workmanager` |
 | Widget | `home_widget` + a native `AppWidgetProvider` |
@@ -144,7 +197,7 @@ uses Android WorkManager every ~6 hours.
 | Charts | `fl_chart` |
 | Backup | JSON via `share_plus` / `file_picker` |
 
-## Database schema (v5)
+## Database schema (v6)
 
 `lib/services/db_service.dart`, with migrations from v1.
 
@@ -155,8 +208,9 @@ uses Android WorkManager every ~6 hours.
 | `ignored_keys` | de-dup keys of SMS rows you deleted, so they're never re-imported |
 | `category_rules` | your merchant-contains-text to category rules |
 | `budgets` | monthly limit per category |
+| `merchant_names` | names you gave a UPI ID or payee, and which ones are your own accounts |
 
-Upgrading from v4 re-imports SMS transactions once with the new parser (manual
+Updating from an older version re-imports SMS transactions once with the new parser (manual
 entries, balances and settings are kept), because rows from the old parser had
 the misclassifications listed in the changelog.
 
@@ -180,6 +234,14 @@ A fresh clone builds without any secrets:
   enable them, add your own Firebase project's file there.
 - **No `android/key.properties`:** release builds are signed with the debug key.
 
+Debug builds install as `com.moneycap.app.debug`, next to the signed app, so testing
+never touches your real data. To retake the README screenshots, build the demo app,
+which uses made-up SMS and never asks for the real inbox:
+
+```bash
+flutter build apk --debug --dart-define=DEMO=true --android-project-arg=demo=true
+```
+
 CI (`.github/workflows/ci.yml`) runs analyze, tests and a debug APK build on every
 push. Tagging `v*` runs `.github/workflows/release.yml`, which also runs analyze and
 tests, then builds a properly signed APK and publishes it with the changelog notes.
@@ -198,7 +260,9 @@ lib/
 │   ├── sms_service.dart          inbox sync with watermark
 │   ├── db_service.dart           SQLite + migrations + backup tables
 │   ├── category_service.dart     categories and merchant rules
+│   ├── duplicate_detector.dart   one payment reported by several SMS
 │   ├── insights_service.dart     recurring detection, budgets
+│   ├── demo_data.dart            made-up SMS for the screenshot build
 │   ├── balance_service.dart      reconciliation
 │   ├── backup_service.dart       validated backup/restore
 │   ├── background_sync.dart      WorkManager task

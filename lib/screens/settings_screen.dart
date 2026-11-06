@@ -3,16 +3,17 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../providers/settings_provider.dart';
 import '../providers/transaction_provider.dart';
 import '../services/backup_service.dart';
 import '../services/push_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/backup_reminder.dart';
+import '../widgets/input_dialogs.dart';
 import 'category_rules_screen.dart';
+import 'hidden_duplicates_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -86,6 +87,13 @@ class SettingsScreen extends StatelessWidget {
         ),
         header('Your data'),
         ListTile(
+          leading: const Icon(Icons.filter_alt_outlined),
+          title: const Text('Hidden duplicates'),
+          subtitle: const Text('Messages that repeat a payment already recorded'),
+          onTap: () => Navigator.push(
+              context, MaterialPageRoute(builder: (_) => const HiddenDuplicatesScreen())),
+        ),
+        ListTile(
           leading: const Icon(Icons.backup_outlined),
           title: const Text('Back up everything'),
           subtitle: const Text('Saves a file you keep (Drive, email to yourself, a PC…)'),
@@ -119,24 +127,13 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Future<void> _editName(BuildContext context, SettingsProvider settings) async {
-    final c = TextEditingController(text: settings.userName ?? '');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (d) => AlertDialog(
-        title: const Text('Your name'),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          onSubmitted: (v) => Navigator.pop(d, v),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(d, c.text), child: const Text('Save')),
-        ],
-      ),
+    // Optional, so an empty answer is allowed: it just removes the name.
+    final name = await showTextDialog(
+      context,
+      title: 'Your name',
+      initial: settings.userName ?? '',
+      capitalization: TextCapitalization.words,
     );
-    c.dispose();
     if (name != null) await settings.setUserName(name);
   }
 
@@ -154,16 +151,8 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
     );
-    if (ok != true) return;
-    try {
-      final json = await provider.exportBackupJson();
-      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
-      final file = await BackupService.writeExportFile('moneycap_backup_$stamp.json', json);
-      await Share.shareXFiles([XFile(file.path, mimeType: 'application/json')],
-          subject: 'MoneyCap backup');
-    } catch (e) {
-      if (context.mounted) showToast(context, 'Backup failed', isError: true);
-    }
+    if (ok != true || !context.mounted) return;
+    await shareBackup(context, provider);
   }
 
   Future<void> _restore(BuildContext context, TransactionProvider provider) async {
@@ -190,18 +179,15 @@ class SettingsScreen extends StatelessWidget {
       return;
     }
     if (!context.mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (d) => AlertDialog(
-        title: const Text('Replace all data?'),
-        content: const Text('Everything on this phone will be replaced by the backup.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Restore')),
-        ],
-      ),
+    final ok = await confirmWithBackupReminder(
+      context,
+      provider,
+      title: 'Replace all data?',
+      message: 'Everything on this phone, including manual transactions, balances, budgets and '
+          'names, will be replaced by the file you picked.',
+      confirmLabel: 'Restore',
     );
-    if (ok != true) return;
+    if (!ok) return;
     try {
       await provider.restoreBackup(json);
       if (context.mounted) showToast(context, 'Backup restored');
@@ -211,20 +197,16 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Future<void> _reset(BuildContext context, TransactionProvider provider) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (d) => AlertDialog(
-        title: const Text('Re-import SMS transactions?'),
-        content: const Text('SMS-imported transactions (and your edits to them) are cleared and the '
-            'inbox is scanned again. Manual entries, balances, categories and budgets are kept. '
-            'Transactions you deleted stay deleted.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Re-import')),
-        ],
-      ),
+    final ok = await confirmWithBackupReminder(
+      context,
+      provider,
+      title: 'Re-import SMS transactions?',
+      message: 'SMS transactions, and any edits you made to them, are cleared and the inbox is '
+          'scanned again. Manual entries, balances, categories, budgets and names are kept. '
+          'Transactions you deleted stay deleted.',
+      confirmLabel: 'Re-import',
     );
-    if (ok != true) return;
+    if (!ok) return;
     await provider.resetSmsData();
     if (context.mounted) showToast(context, 'SMS transactions re-imported');
   }

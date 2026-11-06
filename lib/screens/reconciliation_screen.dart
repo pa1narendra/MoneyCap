@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../models/transaction_model.dart';
 import '../providers/transaction_provider.dart';
 import '../services/balance_service.dart';
 import '../services/db_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/input_dialogs.dart';
 import '../widgets/transaction_form.dart';
 
 /// Monthly reconciliation, per bank account or for all bank accounts
@@ -33,6 +34,9 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   @override
   void initState() {
     super.initState();
+    // Each bank has its own balance, so start on one bank, not the combined view.
+    final banks = context.read<TransactionProvider>().accounts.where(TransactionModel.isBankAccount);
+    if (banks.isNotEmpty) _account = banks.first;
     _loadData();
   }
 
@@ -73,56 +77,20 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   }
 
   Future<void> _showBalanceEntryDialog({required bool isOpening}) async {
-    final cs = Theme.of(context).colorScheme;
     final current = (_monthlyBalance?[isOpening ? 'opening_balance' : 'closing_balance'] as num?)?.toDouble();
-    final controller = TextEditingController(text: current?.toStringAsFixed(2) ?? '');
     final monthName = DateFormat('MMMM yyyy').format(DateTime.parse('$_month-01'));
     final who = _account.isEmpty ? 'all your bank accounts combined' : _account;
 
-    final amount = await showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isOpening ? 'Opening Balance' : 'Closing Balance'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Balance of $who at the ${isOpening ? 'start' : 'end'} of $monthName',
-              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            TextField(
-              controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^-?\d*\.?\d{0,2}'))],
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Balance',
-                prefixText: '₹ ',
-                border: OutlineInputBorder(),
-                hintText: '0.00',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              final v = double.tryParse(controller.text.trim());
-              if (v == null) {
-                showToast(ctx, 'Please enter a valid amount', isError: true);
-                return;
-              }
-              Navigator.pop(ctx, v);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+    // A balance can be exactly 0, or negative on an overdraft.
+    final amount = await showAmountDialog(
+      context,
+      title: isOpening ? 'Opening Balance' : 'Closing Balance',
+      message: 'Balance of $who at the ${isOpening ? 'start' : 'end'} of $monthName',
+      label: 'Balance',
+      initial: current,
+      allowZero: true,
+      allowNegative: true,
     );
-    controller.dispose();
     if (amount == null) return;
     if (isOpening) {
       await _db.saveOpeningBalance(_month, amount, account: _account);
@@ -164,7 +132,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     final bankAccounts = context
         .watch<TransactionProvider>()
         .accounts
-        .where((a) => !a.startsWith('Card'))
+        .where(TransactionModel.isBankAccount)
         .toList();
     final hasOpening = _monthlyBalance?['opening_balance'] != null;
     final hasClosing = _monthlyBalance?['closing_balance'] != null;
@@ -209,8 +177,8 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
                             isExpanded: true,
                             icon: const Icon(Icons.arrow_drop_down),
                             items: [
-                              const DropdownMenuItem(value: '', child: Text('All bank accounts')),
                               for (final a in bankAccounts) DropdownMenuItem(value: a, child: Text(a)),
+                              const DropdownMenuItem(value: '', child: Text('All bank accounts combined')),
                             ],
                             onChanged: (a) {
                               setState(() => _account = a ?? '');

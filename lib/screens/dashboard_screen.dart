@@ -14,6 +14,7 @@ import '../services/push_service.dart';
 import '../services/sms_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/backup_reminder.dart';
 import '../widgets/balance_prompt_dialog.dart';
 import '../widgets/filter_dialog.dart';
 import '../widgets/skeleton_loader.dart';
@@ -45,7 +46,22 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await context.read<TransactionProvider>().start();
+      final provider = context.read<TransactionProvider>();
+      await provider.start(
+        beforeRescan: () async {
+          if (!mounted) return;
+          await confirmWithBackupReminder(
+            context,
+            provider,
+            title: 'MoneyCap needs to re-read your SMS',
+            message: 'This update reads bank messages more accurately, so SMS transactions, and '
+                'any edits you made to them, are rebuilt once. Manual entries, balances and '
+                'settings are kept.',
+            confirmLabel: 'Continue',
+            allowCancel: false,
+          );
+        },
+      );
       if (!mounted) return;
       await _checkBalancePrompt();
       await _initializeNotifications();
@@ -69,18 +85,20 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Future<void> _checkBalancePrompt() async {
-    final prompt = await BalanceService().checkBalancePrompt();
-    if (prompt == null || !mounted || _isBalanceDialogShown) return;
+    // One question per bank account, until they're answered or skipped.
+    if (_isBalanceDialogShown) return;
     _isBalanceDialogShown = true;
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => BalancePromptDialog(prompt: prompt),
-    );
-    _isBalanceDialogShown = false;
-    if (saved == true && prompt.type == PromptType.closing && mounted) {
-      await _handleClosingMismatch(prompt.month);
+    final skipped = <String>{};
+    while (mounted) {
+      final prompt = await BalanceService().checkBalancePrompt(skip: skipped);
+      if (prompt == null || !mounted) break;
+      final saved = await showBalancePrompt(context, prompt);
+      skipped.add(prompt.account);
+      if (saved && prompt.type == PromptType.closing && mounted) {
+        await _handleClosingMismatch(prompt.month, prompt.account);
+      }
     }
+    _isBalanceDialogShown = false;
   }
 
   Future<void> _initializeNotifications() async {
@@ -97,26 +115,18 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   void _handlePayload(String payload) {
+    // A tapped reminder names a month, not an account, so open that month's
+    // reconciliation, where each bank's balances are entered separately.
     final prompt = BalancePrompt.fromPayload(payload);
-    if (prompt == null || !mounted || _isBalanceDialogShown) return;
-    _isBalanceDialogShown = true;
-    showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => BalancePromptDialog(prompt: prompt),
-    ).then((saved) {
-      _isBalanceDialogShown = false;
-      if (saved == true && prompt.type == PromptType.closing && mounted) {
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => ReconciliationScreen(initialMonth: prompt.month)));
-      }
-    });
+    if (prompt == null || !mounted) return;
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => ReconciliationScreen(initialMonth: prompt.month)));
   }
 
   /// After a closing balance is entered, offer to add the missing
   /// transaction right here if the month doesn't reconcile.
-  Future<void> _handleClosingMismatch(String month) async {
-    final disc = await BalanceService().getDiscrepancy(month);
+  Future<void> _handleClosingMismatch(String month, String account) async {
+    final disc = await BalanceService().getDiscrepancy(month, account: account);
     if (disc == null || disc.discrepancy.abs() < 0.01 || !mounted) return;
     final provider = context.read<TransactionProvider>();
     final diff = disc.discrepancy;
@@ -518,7 +528,6 @@ class _TransactionTile extends StatelessWidget {
     final meta = [
       DateFormat('d MMM, HH:mm').format(txn.timestamp),
       category,
-      if (txn.account != null) txn.account!,
     ].join(' · ');
     return ListTile(
       onTap: () => showTransactionSheet(context, txn),

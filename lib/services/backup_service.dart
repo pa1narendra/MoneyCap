@@ -40,6 +40,7 @@ class BackupService {
     'ignored_keys': {'dedup_key': 'T'},
     'category_rules': {'pattern': 'T', 'category': 'T'},
     'budgets': {'category': 'T', 'monthly_limit': 'R'},
+    'merchant_names': {'original': 'T', 'name': 't', 'is_self': 'i'},
   };
 
   static Future<String> encode() async {

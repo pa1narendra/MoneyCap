@@ -2,108 +2,38 @@ import 'package:flutter/material.dart';
 import '../services/balance_service.dart';
 import '../services/db_service.dart';
 import 'app_toast.dart';
+import 'input_dialogs.dart';
 
-class BalancePromptDialog extends StatefulWidget {
-  final BalancePrompt prompt;
-
-  const BalancePromptDialog({super.key, required this.prompt});
-
-  @override
-  State<BalancePromptDialog> createState() => _BalancePromptDialogState();
-}
-
-class _BalancePromptDialogState extends State<BalancePromptDialog> {
-  final _amountController = TextEditingController();
-  final _db = DatabaseHelper.instance;
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _amountController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _saveBalance() async {
-    final amount = double.tryParse(_amountController.text);
-    if (amount == null || amount < 0) {
-      showToast(context, 'Please enter a valid amount', isError: true);
-      return;
+/// Asks for one account's opening or closing balance. Returns true if saved.
+Future<bool> showBalancePrompt(BuildContext context, BalancePrompt prompt) async {
+  final isOpening = prompt.type == PromptType.opening;
+  final who = prompt.account.isEmpty ? 'your bank account' : prompt.account;
+  final amount = await showAmountDialog(
+    context,
+    title: isOpening ? 'Opening balance' : 'Closing balance',
+    message: isOpening
+        ? 'Balance of $who on the 1st of ${prompt.monthName}'
+        : 'Balance of $who on the last day of ${prompt.monthName}',
+    label: 'Balance',
+    allowZero: true,
+    allowNegative: true,
+    cancelLabel: 'Skip',
+    dismissible: false,
+  );
+  if (amount == null) return false;
+  final db = DatabaseHelper.instance;
+  try {
+    if (isOpening) {
+      await db.saveOpeningBalance(prompt.month, amount, account: prompt.account);
+    } else {
+      await db.saveClosingBalance(prompt.month, amount, account: prompt.account);
     }
-
-    setState(() => _isLoading = true);
-
-    try {
-      if (widget.prompt.type == PromptType.opening) {
-        await _db.saveOpeningBalance(widget.prompt.month, amount);
-      } else {
-        await _db.saveClosingBalance(widget.prompt.month, amount);
-      }
-
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-      showToast(
-        context,
-        '${widget.prompt.type == PromptType.opening ? "Opening" : "Closing"} balance saved!',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      showToast(context, 'Error saving balance: $e', isError: true);
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
+  } catch (e) {
+    if (context.mounted) showToast(context, "Couldn't save that balance", isError: true);
+    return false;
   }
-
-  @override
-  Widget build(BuildContext context) {
-    final isOpening = widget.prompt.type == PromptType.opening;
-
-    return AlertDialog(
-      title: Text(
-        isOpening ? 'Opening Balance' : 'Closing Balance',
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            isOpening
-                ? 'Enter your account balance as of the 1st of ${widget.prompt.monthName}'
-                : 'Enter your account balance as of the last day of ${widget.prompt.monthName}',
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _amountController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Balance Amount',
-              prefixText: '₹ ',
-              border: OutlineInputBorder(),
-              hintText: '0.00',
-            ),
-            autofocus: true,
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: _isLoading ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Skip'),
-        ),
-        FilledButton(
-          onPressed: _isLoading ? null : _saveBalance,
-          child: _isLoading
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Save'),
-        ),
-      ],
-    );
+  if (context.mounted) {
+    showToast(context, '${isOpening ? "Opening" : "Closing"} balance saved');
   }
+  return true;
 }

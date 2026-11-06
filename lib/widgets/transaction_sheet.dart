@@ -6,6 +6,7 @@ import '../providers/transaction_provider.dart';
 import '../services/category_service.dart';
 import '../theme/app_theme.dart';
 import 'app_toast.dart';
+import 'input_dialogs.dart';
 import 'transaction_form.dart';
 
 final _money = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
@@ -30,6 +31,9 @@ Future<void> showTransactionSheet(BuildContext context, TransactionModel txn) {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(txn.merchant, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                if (txn.originalMerchant != null)
+                  Text('SMS says ${txn.originalMerchant}',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   '${txn.isTransfer ? 'Transfer' : (txn.type == 'DEBIT' ? 'Expense' : 'Income')} · '
@@ -62,6 +66,28 @@ Future<void> showTransactionSheet(BuildContext context, TransactionModel txn) {
                   ),
                 ],
                 const Divider(height: AppSpacing.lg),
+                if (provider.canName(txn))
+                  ListTile(
+                    leading: const Icon(Icons.badge_outlined),
+                    title: Text(txn.originalMerchant == null && !provider.isSelf(txn)
+                        ? 'Name this person or payee'
+                        : 'Change name'),
+                    subtitle: Text('Applies to all of "${provider.smsNameOf(txn)}", past and future'),
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      final r = await showDialog<(String, bool)>(
+                        context: context,
+                        builder: (_) => NameDialog(
+                          smsName: provider.smsNameOf(txn),
+                          name: txn.originalMerchant == null ? '' : txn.merchant,
+                          isSelf: provider.isSelf(txn),
+                        ),
+                      );
+                      if (r == null) return;
+                      await provider.setMerchantName(txn, r.$1, isSelf: r.$2);
+                      if (context.mounted) showToast(context, 'Saved');
+                    },
+                  ),
                 ListTile(
                   leading: const Icon(Icons.category_outlined),
                   title: const Text('Change category'),
@@ -96,6 +122,10 @@ Future<void> showTransactionSheet(BuildContext context, TransactionModel txn) {
                       transfer: txn.isTransfer,
                     );
                     if (d == null) return;
+                    // Changing a name the user gave changes it everywhere.
+                    if (txn.originalMerchant != null && d.merchant != txn.merchant) {
+                      await provider.setMerchantName(txn, d.merchant, isSelf: provider.isSelf(txn));
+                    }
                     // Build a new object; the in-memory list is only replaced
                     // once the DB write succeeds.
                     await provider.updateTransaction(txn.copyWith(

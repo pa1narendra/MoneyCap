@@ -57,36 +57,79 @@ class CategoryRulesScreen extends StatelessWidget {
 
   Future<void> _edit(BuildContext context, TransactionProvider provider,
       {String? pattern, String? category}) async {
-    final c = TextEditingController(text: pattern ?? '');
-    var cat = category ?? Categories.food;
-    final ok = await showDialog<bool>(
+    final result = await showDialog<(String, String)>(
       context: context,
-      builder: (d) => StatefulBuilder(
-        builder: (d, setState) => AlertDialog(
-          title: Text(pattern == null ? 'New rule' : 'Edit rule'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              controller: c,
-              enabled: pattern == null,
-              decoration: const InputDecoration(labelText: 'Merchant name contains'),
+      builder: (_) => RuleDialog(pattern: pattern, category: category),
+    );
+    if (result != null) await provider.setRule(result.$1, result.$2);
+  }
+}
+
+/// Add/edit one rule. Returns (pattern, category).
+@visibleForTesting
+class RuleDialog extends StatefulWidget {
+  final String? pattern;
+  final String? category;
+  const RuleDialog({super.key, this.pattern, this.category});
+
+  @override
+  State<RuleDialog> createState() => _RuleDialogState();
+}
+
+class _RuleDialogState extends State<RuleDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final _pattern = TextEditingController(text: widget.pattern ?? '');
+  late String _category = widget.category ?? Categories.food;
+
+  @override
+  void dispose() {
+    _pattern.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(context, (_pattern.text.trim(), _category));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.pattern == null ? 'New rule' : 'Edit rule'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextFormField(
+              controller: _pattern,
+              enabled: widget.pattern == null,
+              autofocus: widget.pattern == null,
+              maxLength: 60,
+              decoration: const InputDecoration(
+                  labelText: 'Merchant name contains', counterText: ''),
+              validator: (v) {
+                final t = (v ?? '').trim();
+                if (t.isEmpty) return 'Enter part of a merchant name';
+                // One letter would match nearly every merchant.
+                if (t.length < 2) return 'Use at least 2 characters';
+                return null;
+              },
             ),
             const SizedBox(height: AppSpacing.sm),
             DropdownButtonFormField<String>(
-              initialValue: cat,
+              initialValue: _category,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Category'),
               items: [for (final x in Categories.all) DropdownMenuItem(value: x, child: Text(x))],
-              onChanged: (v) => setState(() => cat = v!),
+              onChanged: (v) => setState(() => _category = v!),
             ),
           ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Save')),
-          ],
         ),
       ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
     );
-    if (ok == true && c.text.trim().isNotEmpty) await provider.setRule(c.text, cat);
-    c.dispose();
   }
 }

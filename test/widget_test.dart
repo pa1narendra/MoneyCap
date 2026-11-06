@@ -25,7 +25,7 @@ void main() {
     await tester.enterText(find.widgetWithText(TextFormField, 'Merchant / description'), '   ');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
-    expect(find.text('Enter an amount above 0'), findsOneWidget);
+    expect(find.text('Enter an amount'), findsOneWidget);
     expect(find.text('Enter a description'), findsOneWidget);
     expect(find.text('Add'), findsOneWidget); // dialog still open
   });

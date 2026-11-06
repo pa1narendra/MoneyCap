@@ -2,6 +2,9 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/transaction_model.dart';
+import 'category_service.dart';
+import 'duplicate_detector.dart';
+import 'parser_service.dart';
 
 /// Columns loaded for list/stat views. `body` (the full SMS text, by far the
 /// largest column) is deliberately left out and fetched on demand via
@@ -14,10 +17,10 @@ const _listColumns = [
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
-  static const schemaVersion = 5;
+  static const schemaVersion = 6;
 
-  /// Set when an upgrade to v5 happens: rows parsed by the old parser are
-  /// unreliable, so the next sync re-imports SMS rows from the inbox.
+  /// Set when an upgrade from an older schema happens: rows parsed by an older
+  /// parser are unreliable, so the next sync re-imports SMS rows from the inbox.
   static bool needsRescan = false;
 
   DatabaseHelper._init();
@@ -69,6 +72,7 @@ CREATE TABLE transactions (
         'CREATE UNIQUE INDEX idx_dedup ON transactions(dedup_key) WHERE dedup_key IS NOT NULL');
     await _createMonthlyBalancesV5(db);
     await _createV5Tables(db);
+    await _createMerchantNames(db);
   }
 
   Future<void> _createMonthlyBalancesV5(Database db) async {
@@ -86,6 +90,12 @@ CREATE TABLE monthly_balances (
 )''');
     await db.execute(
         'CREATE UNIQUE INDEX idx_month_account ON monthly_balances (month, account)');
+  }
+
+  Future<void> _createMerchantNames(Database db) async {
+    // `original` is the lowercase merchant text from the SMS.
+    await db.execute('CREATE TABLE merchant_names ('
+        'original TEXT PRIMARY KEY, name TEXT, is_self INTEGER NOT NULL DEFAULT 0)');
   }
 
   Future<void> _createV5Tables(Database db) async {
@@ -132,6 +142,12 @@ CREATE TABLE monthly_balances (
       await _createV5Tables(db);
       needsRescan = true;
     }
+    if (oldVersion < 6) {
+      await _createMerchantNames(db);
+      // 3.0.0 (schema 5) still counted card bills twice and let spam through,
+      // and its account labels had no bank name, so its rows are rebuilt too.
+      needsRescan = true;
+    }
   }
 
   // ---------------- Transactions ----------------
@@ -171,11 +187,18 @@ CREATE TABLE monthly_balances (
   /// All transactions newest first, WITHOUT the SMS body (see [readBody]).
   Future<List<TransactionModel>> readAllTransactions() async {
     final db = await database;
+    final names = await getMerchantNames();
     final result = await db.query('transactions',
-        columns: _listColumns, orderBy: 'timestamp DESC, id DESC');
-    return result
-        .map((r) => TransactionModel.fromMap({...r, 'body': ''}))
-        .toList(growable: false);
+        columns: _listColumns, where: "kind != 'DUPLICATE'", orderBy: 'timestamp DESC, id DESC');
+    return result.map((r) {
+      final t = TransactionModel.fromMap({...r, 'body': ''});
+      final name = names[Categories.merchantKey(t.merchant)]?.name ?? '';
+      if (name.isNotEmpty) {
+        t.originalMerchant = t.merchant;
+        t.merchant = name;
+      }
+      return t;
+    }).toList(growable: false);
   }
 
   Future<String> readBody(int id) async {
@@ -193,7 +216,8 @@ CREATE TABLE monthly_balances (
       {
         'amount': t.amount,
         'type': t.type,
-        'merchant': t.merchant,
+        // A given name lives in merchant_names; the row keeps the SMS's text.
+        'merchant': t.originalMerchant ?? t.merchant,
         'timestamp': t.timestamp.millisecondsSinceEpoch,
         'kind': t.kind,
         'account': t.account,
@@ -225,6 +249,83 @@ CREATE TABLE monthly_balances (
   Future<int> deleteSmsTransactions() async {
     final db = await database;
     return db.delete('transactions', where: 'source = ?', whereArgs: ['SMS']);
+  }
+
+  /// After a rebuild, moves what still uses a 3.0.0 label (`A/c XX1234`) to the
+  /// bank's label (`HDFC A/c XX1234`): balances and manual transactions aren't
+  /// re-imported, so nothing else would update them. A suffix shared by two
+  /// banks is left alone rather than guessed.
+  Future<void> relinkOldAccountLabels() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        "SELECT DISTINCT account FROM transactions WHERE account LIKE '% A/c %'");
+    final targets = <String, Set<String>>{};
+    for (final r in rows) {
+      final full = r['account'] as String;
+      targets.putIfAbsent(full.substring(full.indexOf('A/c ')), () => {}).add(full);
+    }
+    await db.transaction((txn) async {
+      for (final e in targets.entries) {
+        if (e.value.length != 1) continue;
+        final args = [e.value.single, e.key];
+        // If this month's new label already has a balance, keep that one.
+        await txn.rawUpdate('UPDATE OR IGNORE monthly_balances SET account = ? WHERE account = ?', args);
+        await txn.rawUpdate('UPDATE transactions SET account = ? WHERE account = ?', args);
+      }
+    });
+  }
+
+  /// Hides rows that repeat a payment reported by another SMS (see
+  /// [DuplicateDetector]). Returns how many were hidden.
+  Future<int> resolveDuplicates(List<int> newIds) async {
+    if (newIds.isEmpty) return 0;
+    final db = await database;
+    final bounds = await db.rawQuery(
+        'SELECT MIN(timestamp) lo, MAX(timestamp) hi FROM transactions WHERE id IN (${newIds.join(',')})');
+    final lo = bounds.first['lo'] as int?;
+    final hi = bounds.first['hi'] as int?;
+    if (lo == null || hi == null) return 0;
+    final span = DuplicateDetector.cardBillWindow.inMilliseconds;
+    final rows = await db.query('transactions',
+        columns: ['id', 'amount', 'type', 'kind', 'account', 'merchant', 'timestamp', 'dedup_key'],
+        where: "source = 'SMS' AND kind != 'DUPLICATE' AND timestamp BETWEEN ? AND ?",
+        whereArgs: [lo - span, hi + span],
+        orderBy: 'timestamp, id');
+    final plan = DuplicateDetector.plan(rows, newIds.toSet());
+    await db.transaction((txn) async {
+      if (plan.hide.isNotEmpty) {
+        await txn.update('transactions', {'kind': TransactionModel.kindDuplicate},
+            where: 'id IN (${plan.hide.join(',')})');
+      }
+      if (plan.markTransfer.isNotEmpty) {
+        await txn.update('transactions', {'kind': TransactionModel.kindTransfer},
+            where: 'id IN (${plan.markTransfer.join(',')})');
+      }
+    });
+    return plan.hide.length;
+  }
+
+  /// Hidden duplicates, newest first (with the SMS text, for review).
+  Future<List<TransactionModel>> readHiddenDuplicates() async {
+    final db = await database;
+    final rows = await db.query('transactions',
+        where: "kind = 'DUPLICATE'", orderBy: 'timestamp DESC, id DESC');
+    return rows.map(TransactionModel.fromMap).toList(growable: false);
+  }
+
+  /// "Not a duplicate": puts a hidden row back. It won't be hidden again,
+  /// because only newly imported rows are compared.
+  Future<void> restoreDuplicate(TransactionModel t) async {
+    final db = await database;
+    await db.update(
+        'transactions',
+        {
+          'kind': t.merchant == ParserService.cardBillMerchant
+              ? TransactionModel.kindTransfer
+              : TransactionModel.kindNormal,
+        },
+        where: 'id = ?',
+        whereArgs: [t.id]);
   }
 
   /// Marks a debit and a credit of the same amount on two DIFFERENT accounts
@@ -274,6 +375,59 @@ CREATE TABLE monthly_balances (
       }
     }
     return used;
+  }
+
+  // ---------------- Names you gave to people and UPI IDs ----------------
+
+  /// The name for a merchant as the SMS wrote it. `isSelf` means it's one of
+  /// the user's own accounts, so its payments are transfers.
+  Future<Map<String, ({String name, bool isSelf})>> getMerchantNames() async {
+    final db = await database;
+    final rows = await db.query('merchant_names');
+    return {
+      for (final r in rows)
+        r['original'] as String: (
+          name: (r['name'] as String?) ?? '',
+          isSelf: (r['is_self'] as int? ?? 0) == 1,
+        ),
+    };
+  }
+
+  /// Sets the name used for every transaction from [original], past and
+  /// future. An empty name with [isSelf] false removes the entry.
+  Future<void> setMerchantName(String original, String name, {bool isSelf = false}) async {
+    final key = Categories.merchantKey(original);
+    final db = await database;
+    await db.transaction((txn) async {
+      final old = await txn.query('merchant_names',
+          columns: ['is_self'], where: 'original = ?', whereArgs: [key], limit: 1);
+      final wasSelf = old.isNotEmpty && old.first['is_self'] == 1;
+      if (name.trim().isEmpty && !isSelf) {
+        await txn.delete('merchant_names', where: 'original = ?', whereArgs: [key]);
+      } else {
+        await txn.insert(
+            'merchant_names', {'original': key, 'name': name.trim(), 'is_self': isSelf ? 1 : 0},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      if (isSelf && !wasSelf) {
+        await txn.update('transactions', {'kind': TransactionModel.kindTransfer},
+            where: "kind = 'NORMAL' AND LOWER(merchant) = ?", whereArgs: [key]);
+      } else if (!isSelf && wasSelf) {
+        await txn.update('transactions', {'kind': TransactionModel.kindNormal},
+            where: "kind = 'TRANSFER' AND LOWER(merchant) = ?", whereArgs: [key]);
+      }
+    });
+  }
+
+  /// Newly imported rows from the user's own accounts become transfers. Only
+  /// new rows, so one the user switched back by hand stays as they left it.
+  Future<void> applySelfRules(List<int> newIds) async {
+    if (newIds.isEmpty) return;
+    final db = await database;
+    await db.rawUpdate(
+        "UPDATE transactions SET kind = 'TRANSFER' WHERE kind = 'NORMAL' "
+        'AND id IN (${newIds.join(',')}) '
+        'AND LOWER(merchant) IN (SELECT original FROM merchant_names WHERE is_self = 1)');
   }
 
   // ---------------- Categories & budgets ----------------
@@ -355,22 +509,35 @@ CREATE TABLE monthly_balances (
         where: 'month = ? AND account = ?', whereArgs: [month, account]);
   }
 
+  /// Bank accounts with activity since [since], most used first. Accounts that
+  /// went quiet (a closed account) don't keep asking for balances.
+  Future<List<String>> activeBankAccounts(DateTime since) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        "SELECT account, COUNT(*) n FROM transactions WHERE kind != 'DUPLICATE' "
+        "AND account LIKE '%A/c %' AND timestamp >= ? GROUP BY account ORDER BY n DESC",
+        [since.millisecondsSinceEpoch]);
+    return rows.map((r) => r['account'] as String).toList();
+  }
+
   /// Transactions in [month] (yyyy-MM) used for reconciliation. With an
-  /// [account] only that account's rows (transfers included: they really
-  /// moved money). With '' = all bank accounts combined: card rows are left
-  /// out because a card balance isn't part of a bank balance.
+  /// [account] that account's rows (transfers included: they really moved
+  /// money) plus the same bank's debit cards, whose spending comes out of the
+  /// account. With '' = all bank accounts combined: credit cards and wallets
+  /// are left out because they aren't part of a bank balance.
   Future<List<Map<String, Object?>>> monthRows(String month, {String account = ''}) async {
     final db = await database;
     final parts = month.split('-');
     final start = DateTime(int.parse(parts[0]), int.parse(parts[1]), 1);
     final end = DateTime(start.year, start.month + 1, 1);
-    final where = StringBuffer('timestamp >= ? AND timestamp < ?');
+    final where = StringBuffer("kind != 'DUPLICATE' AND timestamp >= ? AND timestamp < ?");
     final args = <Object?>[start.millisecondsSinceEpoch, end.millisecondsSinceEpoch];
     if (account.isNotEmpty) {
-      where.write(' AND account = ?');
-      args.add(account);
+      final at = account.indexOf('A/c ');
+      where.write(' AND (account = ? OR account LIKE ?)');
+      args.addAll([account, at < 0 ? account : '${account.substring(0, at)}Debit %']);
     } else {
-      where.write(" AND (account IS NULL OR account NOT LIKE 'Card%')");
+      where.write(" AND (account IS NULL OR (account NOT LIKE '%Card %' AND account NOT LIKE '%Wallet%'))");
     }
     return db.query('transactions',
         columns: ['amount', 'type', 'kind'], where: where.toString(), whereArgs: args);
@@ -385,7 +552,7 @@ CREATE TABLE monthly_balances (
     final end = DateTime(start.year, start.month + 1, 1);
     return db.query('transactions',
         columns: ['amount', 'type', 'kind'],
-        where: 'timestamp >= ? AND timestamp < ?',
+        where: "kind != 'DUPLICATE' AND timestamp >= ? AND timestamp < ?",
         whereArgs: [start.millisecondsSinceEpoch, end.millisecondsSinceEpoch]);
   }
 
@@ -393,6 +560,7 @@ CREATE TABLE monthly_balances (
 
   static const _backupTables = [
     'transactions', 'monthly_balances', 'ignored_keys', 'category_rules', 'budgets',
+    'merchant_names',
   ];
 
   Future<Map<String, List<Map<String, Object?>>>> dumpAll() async {
